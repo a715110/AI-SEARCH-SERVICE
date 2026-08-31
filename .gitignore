@@ -8,6 +8,7 @@
 *.jar
 *.war
 *.ear
+*.env
 
 # Maven specific files
 target/

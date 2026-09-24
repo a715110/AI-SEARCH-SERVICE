@@ -21,8 +21,8 @@
     <artifactId>spring-boot-starter-parent</artifactId>
     <groupId>org.springframework.boot</groupId>
     <relativePath/>
-    <!-- <version>3.4.10</version> lookup parent from repository -->
-    <version>3.4.10</version>
+    <!-- lookup parent from repository -->
+    <version>3.5.16</version> <!-- SB3.5.16: was 3.4.13 -->
   </parent>
 
   <properties>
@@ -102,7 +102,7 @@
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
-      <version>42.7.7</version>
+      <!-- SB3.5.16: version 42.7.7 removed; Boot manages the PostgreSQL driver -->
     </dependency>
 
 <!--    <dependency>-->
@@ -155,12 +155,12 @@
     <dependency>
       <groupId>org.mapstruct</groupId>
       <artifactId>mapstruct</artifactId>
-      <version>1.5.5.Final</version>
+      <version>1.6.3</version> <!-- SB3.5.16: was 1.5.5.Final; aligned with baseline-common -->
     </dependency>
     <dependency>
       <groupId>org.mapstruct</groupId>
       <artifactId>mapstruct-processor</artifactId>
-      <version>1.5.5.Final</version>
+      <version>1.6.3</version> <!-- SB3.5.16: was 1.5.5.Final; aligned with baseline-common -->
       <scope>provided</scope>
     </dependency>
     <dependency>

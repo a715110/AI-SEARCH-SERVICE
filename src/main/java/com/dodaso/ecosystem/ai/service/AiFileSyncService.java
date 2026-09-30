@@ -3,6 +3,7 @@ package com.dodaso.ecosystem.ai.service;
 import com.dodaso.ecosystem.ai.constant.EcwsProjectEnum;
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
 import com.dodaso.ecosystem.ai.dto.AiSearchSyncDTO;
+import com.dodaso.ecosystem.ai.repository.EcwsEmbeddingRepository;
 import com.dodaso.ecosystem.ai.repository.EcwsEmbeddingSyncRepository;
 import com.dodaso.ecosystem.baseline.common.constant.ServiceDiscoveryEnum;
 import com.dodaso.ecosystem.baseline.common.container.RESTReqContainer;
@@ -13,13 +14,18 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpMethod;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
@@ -28,9 +34,14 @@ public class AiFileSyncService {
 
     private static final int CHUNK_SIZE = 500; // words per chunk
 
+    private static final List<String> FILE_SOURCE_TYPES = List.of(
+        EmbeddingSourceTypeEnum.TASK_FILE_ATTACHMENT.getSourceType(),
+        EmbeddingSourceTypeEnum.COMMENT_FILE_ATTACHMENT.getSourceType());
+
     private final FileTextExtractorService extractorService;
     private final AiSyncService aiSyncService;
     private final EcwsEmbeddingSyncRepository syncRepository;
+    private final EcwsEmbeddingRepository embeddingRepository;
     private final RESTServiceClient restServiceClient;
 
     @Async
@@ -51,7 +62,12 @@ public class AiFileSyncService {
                 : (attachment.getCollaborationTaskDTO() != null
                     ? (long) attachment.getCollaborationTaskDTO().getId()
                     : null);
+            // Owning task for both file types; ecws sends it for comment files too (plan §7.5).
+            Long taskId = attachment.getCollaborationTaskDTO() != null
+                ? (long) attachment.getCollaborationTaskDTO().getId()
+                : null;
 
+            List<AiSearchSyncDTO> chunkDtos = new ArrayList<>(chunks.size());
             for (int i = 0; i < chunks.size(); i++) {
                 String chunk = chunks.get(i);
                 AiSearchSyncDTO syncDto = AiSearchSyncDTO.builder()
@@ -62,12 +78,17 @@ public class AiFileSyncService {
                     .description(chunk)
                     .status("ACTIVE")
                     .parentSourceId(parentSourceId)
+                    .taskId(taskId)
                     .projectId(EcwsProjectEnum.ECWS.getProjectId())
                     .sourceUpdatedAt(Instant.now())
                     .build();
 
-                aiSyncService.sync(syncDto);
+                // ATTACH-CS: was one sync() per chunk; each call replaced the file's rows, so only
+                // the last chunk was kept (plan §7.4). Now all chunks are stored by syncChunks below.
+                // aiSyncService.sync(syncDto);
+                chunkDtos.add(syncDto);
             }
+            aiSyncService.syncChunks(type.getSourceType(), Long.valueOf(attachment.getId()), chunkDtos);
         } catch (UnsupportedOperationException e) {
             log.warn("Skipping unsupported file: {}", attachment.getFileName());
         } catch (Exception e) {
@@ -75,8 +96,81 @@ public class AiFileSyncService {
         }
     }
 
+    /**
+     * Removes the embeddings and sync records of deleted file attachments (plan
+     * PLAN-attachment-to-common-service §7.3). file_attachment.id is unique across task and
+     * comment files, so both source types are cleared for each id. Ids with nothing stored are
+     * ignored, so calling this twice is safe.
+     *
+     * @return number of ids processed
+     */
+    @Transactional
+    public int deleteFileEmbeddings(List<FileAttachmentDTO> attachments) {
+        List<Long> ids = attachments == null ? List.of() : attachments.stream()
+            .filter(a -> a != null && a.getId() != null && a.getId() > 0)
+            .map(a -> Long.valueOf(a.getId()))
+            .distinct()
+            .toList();
+        deleteFileEmbeddingIds(ids);
+        log.info("Deleted file embeddings for file_attachment ids {}", ids);
+        return ids.size();
+    }
+
+    private void deleteFileEmbeddingIds(Collection<Long> ids) {
+        for (Long id : ids) {
+            for (String sourceType : FILE_SOURCE_TYPES) {
+                embeddingRepository.deleteBySourceTypeAndSourceId(sourceType, id);
+                syncRepository.deleteBySourceTypeAndSourceId(sourceType, id);
+            }
+        }
+    }
+
+    /**
+     * file_attachment ids that currently have file embeddings or sync records. Read before the
+     * active list is fetched, so a file uploaded during the refresh is never a cleanup candidate.
+     */
+    private Set<Long> findStoredFileIds() {
+        Set<Long> ids = new HashSet<>(embeddingRepository.findDistinctSourceIdsBySourceTypeIn(FILE_SOURCE_TYPES));
+        ids.addAll(syncRepository.findDistinctSourceIdsBySourceTypeIn(FILE_SOURCE_TYPES));
+        return ids;
+    }
+
+    /**
+     * Safety net for the delete-time cleanup (plan §7.3): removes file embeddings and sync records
+     * whose file_attachment is no longer active. Catches failed cleanup calls, deletes made while
+     * the file was still being embedded, and deletes from before the cleanup existed. Skipped when
+     * the active list is empty, so an ecws-service problem can't wipe every file embedding.
+     */
+    private void removeInactiveFileEmbeddings(Set<Long> storedIds, List<FileAttachmentDTO> activeAttachments) {
+        try {
+            if (activeAttachments.isEmpty()) {
+                log.warn("Inactive file embedding cleanup skipped: ecws_service returned no active files");
+                return;
+            }
+            Set<Long> activeIds = activeAttachments.stream()
+                .filter(a -> a.getId() != null)
+                .map(a -> Long.valueOf(a.getId()))
+                .collect(Collectors.toSet());
+            List<Long> staleIds = storedIds.stream()
+                .filter(id -> !activeIds.contains(id))
+                .sorted()
+                .toList();
+            if (staleIds.isEmpty()) {
+                log.info("Inactive file embedding cleanup: nothing to remove");
+                return;
+            }
+            deleteFileEmbeddingIds(staleIds);
+            log.info("Inactive file embedding cleanup: removed embeddings for {} file(s): {}",
+                staleIds.size(), staleIds);
+        } catch (Exception e) {
+            log.error("Inactive file embedding cleanup failed", e);
+        }
+    }
+
     public void refreshFileSyncs() {
         try {
+            Set<Long> storedFileIds = findStoredFileIds();
+
             log.info("Fetching all active file attachments for sync");
 
             FileAttachmentDTOContainer metaRequest = new FileAttachmentDTOContainer();
@@ -149,6 +243,8 @@ public class AiFileSyncService {
 
             log.info("File sync refresh completed: {} synced, {} skipped, {} failed, {} total",
                 syncedCount, skippedCount, failedCount, attachments.size());
+
+            removeInactiveFileEmbeddings(storedFileIds, attachments);
 
         } catch (Exception e) {
             log.error("Failed to refresh file attachments for AI sync", e);

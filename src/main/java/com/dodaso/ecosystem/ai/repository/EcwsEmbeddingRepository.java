@@ -2,6 +2,7 @@ package com.dodaso.ecosystem.ai.repository;
 
 import com.dodaso.ecosystem.ai.entity.EcwsEmbedding;
 import jakarta.transaction.Transactional;
+import java.util.Collection;
 import java.util.Date;
 import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -18,6 +19,9 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
     @Modifying
     @Transactional
     void deleteBySourceTypeAndSourceId(String sourceType, Long sourceId);
+
+    @Query("SELECT DISTINCT e.sourceId FROM EcwsEmbedding e WHERE e.sourceType IN :sourceTypes")
+    List<Long> findDistinctSourceIdsBySourceTypeIn(@Param("sourceTypes") Collection<String> sourceTypes);
 
     /**
      * Similarity search implementation
@@ -39,13 +43,15 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
      * Search across all source types within a project (no workspaceId filter).
      * Explicitly selects columns and casts embedding to text so Hibernate
      * can map all fields including parent_source_id correctly.
+     * ATTACH-CS: task_id added to the column list; without it the new EcwsEmbedding.taskId field
+     * can't be mapped and every search fails (plan §7.5). The list was otherwise unchanged.
      */
     @Query(value = """
         SELECT id, source_type, source_id, chunk_index, chunk_text, chunk_tokens,
                embedding::text AS embedding, summary, status, project_id,
                created_by_user_id, updated_by_user_id, workspace_id, user_id,
                source_updated_at, priority, requestor, due_date, scheduled_date,
-               parent_source_id,
+               parent_source_id, task_id,
                created_at, created_by, updated_at, updated_by
         FROM ecws_embeddings
         WHERE project_id = :projectId

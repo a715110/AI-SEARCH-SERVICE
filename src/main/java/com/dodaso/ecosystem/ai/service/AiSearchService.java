@@ -17,6 +17,7 @@ import com.dodaso.ecosystem.ecws.container.CollaborationTaskDTOContainer;
 import com.dodaso.ecosystem.ecws.dto.CollaborationTaskDTO;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -68,6 +69,11 @@ public class AiSearchService {
 
     private static final Long SYSTEM_USER_ID = 1L; // Reserved system user ID
 
+    /** Results returned per search (unchanged from before the chunk fix). */
+    private static final int RESULT_LIMIT = 10;
+    /** Rows fetched per result slot, so chunks of the same file can be collapsed (plan §7.4). */
+    private static final int CANDIDATE_FACTOR = 5;
+
   // private final OllamaChatModel chatModel;
 //
    //  public AiSearchService(OllamaChatModel chatModel) {
@@ -89,13 +95,35 @@ private final ChatClient chatClient = null;
         float[] queryVector = ollamaService.getOllamaEmbedding(query);
 
         // 2. Find similar embeddings across all source types
-        List<EcwsEmbedding> similar = embeddingRepository.findSimilarAll(projectId, VectorUtil.toString(queryVector), 10);
+        // ATTACH-CS: was the top 10 rows; a file now has one row per chunk, so one file could take
+        // several result slots (plan §7.4). Fetch more rows and keep each source's best chunk.
+        // List<EcwsEmbedding> similar = embeddingRepository.findSimilarAll(projectId, VectorUtil.toString(queryVector), 10);
+        // ATTACH-CS: was cut to RESULT_LIMIT here, before results without a task are skipped below,
+        // so a query whose closest rows all lacked a task returned nothing (plan §7.5). All
+        // candidates are kept; the loop below stops at RESULT_LIMIT.
+        // List<EcwsEmbedding> similar = bestChunkPerSource(
+        //     embeddingRepository.findSimilarAll(projectId, VectorUtil.toString(queryVector),
+        //         RESULT_LIMIT * CANDIDATE_FACTOR),
+        //     RESULT_LIMIT);
+        List<EcwsEmbedding> similar = bestChunkPerSource(
+            embeddingRepository.findSimilarAll(projectId, VectorUtil.toString(queryVector),
+                RESULT_LIMIT * CANDIDATE_FACTOR),
+            RESULT_LIMIT * CANDIDATE_FACTOR);
 
         // 3. Map to DTOs
         List<AiSearchResultDTO> results = new ArrayList<>();
         List<Long> sourceIds = new ArrayList<>();
         for (EcwsEmbedding emb : similar) {
+            if (results.size() >= RESULT_LIMIT) {
+                break;
+            }
             Long taskId = resolveTaskId(emb);
+            // Every result is shown as a link to its task; without one it can't be opened (§7.5).
+            if (taskId == null) {
+                log.warn("Skipping search result {} {}: owning task unknown",
+                    emb.getSourceType(), emb.getSourceId());
+                continue;
+            }
             results.add(AiSearchResultDTO.builder()
                 .sourceId(emb.getSourceId())
                 .sourceType(emb.getSourceType())
@@ -126,14 +154,39 @@ private final ChatClient chatClient = null;
 
 
 
-    private Long resolveTaskId(EcwsEmbedding emb) {
+    /**
+     * Keeps the first (closest) row per source_type + source_id, in similarity order, up to limit.
+     */
+    private static List<EcwsEmbedding> bestChunkPerSource(List<EcwsEmbedding> rows, int limit) {
+        Map<String, EcwsEmbedding> best = new LinkedHashMap<>();
+        for (EcwsEmbedding emb : rows) {
+            if (best.size() >= limit) {
+                break;
+            }
+            best.putIfAbsent(emb.getSourceType() + ":" + emb.getSourceId(), emb);
+        }
+        return new ArrayList<>(best.values());
+    }
+
+    /**
+     * Task a result opens (plan §7.5). Uses task_id when set; rows written before that column
+     * existed fall back to the old lookups. Returns null when the task can't be known: the old
+     * fallbacks used a comment or file id as a task id and opened the wrong task.
+     */
+    Long resolveTaskId(EcwsEmbedding emb) {
+        if (emb.getTaskId() != null) {
+            return emb.getTaskId();
+        }
         String sourceType = emb.getSourceType();
         if (EmbeddingSourceTypeEnum.COLLABORATION_TASK.getSourceType().equals(sourceType)) {
             return emb.getSourceId();
         }
         if (EmbeddingSourceTypeEnum.TASK_COMMENT.getSourceType().equals(sourceType)
                 || EmbeddingSourceTypeEnum.TASK_FILE_ATTACHMENT.getSourceType().equals(sourceType)) {
-            return emb.getParentSourceId() != null ? emb.getParentSourceId() : emb.getSourceId();
+            // ATTACH-CS: was the source id when parent_source_id is null, i.e. a comment or file id
+            // used as a task id (plan §7.5).
+            // return emb.getParentSourceId() != null ? emb.getParentSourceId() : emb.getSourceId();
+            return emb.getParentSourceId();
         }
         if (EmbeddingSourceTypeEnum.COMMENT_FILE_ATTACHMENT.getSourceType().equals(sourceType)
                 && emb.getParentSourceId() != null) {
@@ -142,9 +195,13 @@ private final ChatClient chatClient = null;
             if (!parentComments.isEmpty() && parentComments.get(0).getParentSourceId() != null) {
                 return parentComments.get(0).getParentSourceId();
             }
-            return emb.getParentSourceId(); // fallback: comment ID
+            // ATTACH-CS: was the comment id used as a task id (plan §7.5).
+            // return emb.getParentSourceId(); // fallback: comment ID
+            return null;
         }
-        return emb.getSourceId(); // last resort fallback
+        // ATTACH-CS: was the source id as a last resort (plan §7.5).
+        // return emb.getSourceId(); // last resort fallback
+        return null;
     }
 
     private float[] getPlaceholderEmbedding(String text) {

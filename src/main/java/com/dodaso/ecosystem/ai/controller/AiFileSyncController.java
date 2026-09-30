@@ -38,4 +38,16 @@ public class AiFileSyncController extends RESTServiceController<FileAttachmentDT
         response.setResultMessage("File sync triggered for: " + attachment.getFileName());
         return new ResponseEntity<>(response, HttpStatus.OK);
     }
+
+    /**
+     * Deletes the embeddings and sync records of deleted file attachments, keyed by
+     * file_attachment.id (plan PLAN-attachment-to-common-service §7.3).
+     */
+    @PostMapping(value = "/deleteFileEmbeddings", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<FileAttachmentDTOContainer> deleteFileEmbeddings(@RequestBody FileAttachmentDTOContainer requestBody) {
+        int count = aiFileSyncService.deleteFileEmbeddings(requestBody.getFileAttachmentDTOList());
+        FileAttachmentDTOContainer response = new FileAttachmentDTOContainer();
+        response.setResultMessage("Deleted file embeddings for " + count + " file(s)");
+        return new ResponseEntity<>(response, HttpStatus.OK);
+    }
 }

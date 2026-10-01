@@ -7,7 +7,7 @@
   <artifactId>ai-search-service</artifactId>
   <modelVersion>4.0.0</modelVersion>
   <packaging>jar</packaging>
-  <version>1.0.0-SNAPSHOT</version>
+  <version>${revision}</version> <!-- STEP1: was hard-coded 1.0.0-SNAPSHOT -->
 
   <!--
   <parent>
@@ -28,6 +28,8 @@
   <properties>
     <java.version>21</java.version>
     <revision>1.0.0-SNAPSHOT</revision>
+    <spring-cloud.version>2025.0.3</spring-cloud.version> <!-- STEP1: added; train for Boot 3.5.x -->
+    <spring-cloud-azure.version>6.5.0</spring-cloud-azure.version> <!-- STEP1: Spring Cloud Azure line for Boot 3.5.x -->
   </properties>
 <!--  <repositories>-->
 <!--    <repository>-->
@@ -71,6 +73,22 @@
         <type>pom</type>
         <scope>import</scope>
       </dependency>
+      <!-- STEP1: Spring Cloud BOM (Eureka client was only arriving transitively) -->
+      <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-dependencies</artifactId>
+        <version>${spring-cloud.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- STEP1: Spring Cloud Azure BOM; also manages com.azure:* SDK versions -->
+      <dependency>
+        <groupId>com.azure.spring</groupId>
+        <artifactId>spring-cloud-azure-dependencies</artifactId>
+        <version>${spring-cloud-azure.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
@@ -78,12 +96,27 @@
     <dependency>
       <groupId>com.dodaso.ecosystem.ai.data.model</groupId>
       <artifactId>ai-search-data-model</artifactId>
-      <version>1.0.0-SNAPSHOT</version>
+      <version>${revision}</version>
+    </dependency>
+    <!-- STEP1: replaces com.azure:azure-storage-blob. This service has ecws-service (and through it common-service) on its classpath, so AzureBlobStorageHandler needs the auto-configured BlobServiceClient here too once AzureBlobConfig is deleted. -->
+    <dependency>
+      <groupId>com.azure.spring</groupId>
+      <artifactId>spring-cloud-azure-starter-storage-blob</artifactId>
+    </dependency>
+    <!-- STEP1: Key Vault as a Spring PropertySource (version from the Azure BOM) -->
+    <dependency>
+      <groupId>com.azure.spring</groupId>
+      <artifactId>spring-cloud-azure-starter-keyvault-secrets</artifactId>
+    </dependency>
+    <!-- STEP1: @Validated on DodasoInstanceProperties (fail fast on missing config) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
     <dependency>
       <artifactId>baseline-common</artifactId>
       <groupId>com.dodaso.ecosystem.baseline.common</groupId>
-      <version>1.0.0-SNAPSHOT</version>
+      <version>${revision}</version>
     </dependency>
 
     <dependency>
@@ -97,6 +130,12 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <!-- STEP1: declared explicitly (was only arriving through ecws-service) so its version
+         comes from this module's Spring Cloud BOM. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
     </dependency>
 
     <dependency>
@@ -164,15 +203,9 @@
       <scope>provided</scope>
     </dependency>
     <dependency>
-      <groupId>com.azure</groupId>
-      <artifactId>azure-storage-blob</artifactId>
-      <version>12.30.0</version>
-      <scope>compile</scope>
-    </dependency>
-    <dependency>
       <groupId>com.dodaso.ecosystem.ecws.service</groupId>
       <artifactId>ecws-service</artifactId>
-      <version>1.0.0-SNAPSHOT</version>
+      <version>${revision}</version>
       <scope>compile</scope>
     </dependency>
     <dependency>
@@ -212,6 +245,30 @@
   </dependencies>
 
   <build>
+    <!-- STEP1: resources replaced. Mirrors spring-boot-starter-parent's default
+         (filter only application*.yml/yaml/properties with @..@ tokens, copy everything
+         else untouched). **/*.p12 is excluded so a keystore can never be packaged. -->
+    <resources>
+      <resource>
+        <directory>${basedir}/src/main/resources</directory>
+        <filtering>true</filtering>
+        <includes>
+          <include>**/application*.yml</include>
+          <include>**/application*.yaml</include>
+          <include>**/application*.properties</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>${basedir}/src/main/resources</directory>
+        <filtering>false</filtering>
+        <excludes>
+          <exclude>**/application*.yml</exclude>
+          <exclude>**/application*.yaml</exclude>
+          <exclude>**/application*.properties</exclude>
+          <exclude>**/*.p12</exclude>
+        </excludes>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -240,6 +297,15 @@
             --add-opens java.base/jdk.internal.reflect=ALL-UNNAMED
           </jvmArguments>
         </configuration>
+        <executions>
+          <!-- STEP1: META-INF/build-info.properties -> /actuator/info shows the release version -->
+          <execution>
+            <id>build-info</id>
+            <goals>
+              <goal>build-info</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
@@ -251,4 +317,4 @@
       </plugin>
     </plugins>
   </build>
-</project>
+</project>

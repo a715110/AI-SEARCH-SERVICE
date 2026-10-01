@@ -34,6 +34,15 @@ public class AiFileSyncService {
 
     private static final int CHUNK_SIZE = 500; // words per chunk
 
+    /**
+     * Characters per chunk. nomic-embed-text accepts at most 2048 tokens, and filler such as
+     * "_____" or "....." in form PDFs costs one token per character, so a 500-word chunk of
+     * a fillable form went over the limit and Ollama returned 500 "the input length exceeds
+     * the context length". 1800 chars stays under 2048 tokens for any text, with room for
+     * the "File: ... | Content: " prefix added by buildContext.
+     */
+    private static final int MAX_CHUNK_CHARS = 1800;
+
     private static final List<String> FILE_SOURCE_TYPES = List.of(
         EmbeddingSourceTypeEnum.TASK_FILE_ATTACHMENT.getSourceType(),
         EmbeddingSourceTypeEnum.COMMENT_FILE_ATTACHMENT.getSourceType());
@@ -266,22 +275,66 @@ public class AiFileSyncService {
         }
     }
 
-    private List<String> chunkText(String text, int wordsPerChunk) {
+    // ATTACH-CS: was word-count-only chunking; a chunk of form filler ("_____") went over
+    // nomic-embed-text's 2048-token limit. Replaced by chunkText below, which also caps chunks
+    // at MAX_CHUNK_CHARS (plan §7.4).
+    // private List<String> chunkText(String text, int wordsPerChunk) {
+    //     String[] words = text.split("\\s+");
+    //     List<String> chunks = new ArrayList<>();
+    //     StringBuilder chunkBuilder = new StringBuilder();
+    //     int wordCount = 0;
+    //
+    //     for (String word : words) {
+    //         if (wordCount > 0) {
+    //             chunkBuilder.append(" ");
+    //         }
+    //         chunkBuilder.append(word);
+    //         if (++wordCount >= wordsPerChunk) {
+    //             chunks.add(chunkBuilder.toString());
+    //             chunkBuilder.setLength(0);
+    //             wordCount = 0;
+    //         }
+    //     }
+    //
+    //     if (!chunkBuilder.isEmpty()) {
+    //         chunks.add(chunkBuilder.toString());
+    //     }
+    //
+    //     return chunks;
+    // }
+
+    /**
+     * Splits text into chunks of at most {@code wordsPerChunk} words and at most
+     * {@link #MAX_CHUNK_CHARS} characters. A single word longer than the character cap
+     * (e.g. a long "______" line) is cut into cap-sized pieces.
+     */
+    List<String> chunkText(String text, int wordsPerChunk) {
         String[] words = text.split("\\s+");
         List<String> chunks = new ArrayList<>();
         StringBuilder chunkBuilder = new StringBuilder();
         int wordCount = 0;
 
         for (String word : words) {
-            if (wordCount > 0) {
-                chunkBuilder.append(" ");
-            }
-            chunkBuilder.append(word);
-            if (++wordCount >= wordsPerChunk) {
-                chunks.add(chunkBuilder.toString());
-                chunkBuilder.setLength(0);
-                wordCount = 0;
-            }
+            int start = 0;
+            do {
+                String piece = word.substring(start, Math.min(word.length(), start + MAX_CHUNK_CHARS));
+                start += MAX_CHUNK_CHARS;
+
+                if (wordCount > 0 && chunkBuilder.length() + 1 + piece.length() > MAX_CHUNK_CHARS) {
+                    chunks.add(chunkBuilder.toString());
+                    chunkBuilder.setLength(0);
+                    wordCount = 0;
+                }
+                if (wordCount > 0) {
+                    chunkBuilder.append(" ");
+                }
+                chunkBuilder.append(piece);
+                if (++wordCount >= wordsPerChunk) {
+                    chunks.add(chunkBuilder.toString());
+                    chunkBuilder.setLength(0);
+                    wordCount = 0;
+                }
+            } while (start < word.length());
         }
 
         if (!chunkBuilder.isEmpty()) {

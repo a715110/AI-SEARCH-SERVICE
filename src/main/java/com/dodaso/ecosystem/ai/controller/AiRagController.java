@@ -27,9 +27,14 @@ public class AiRagController extends RESTServiceController<AiSearchSyncDTOContai
     @Autowired
     private AiRagService aiRagService;
 
+    @Autowired
+    private AiSearchService aiSearchService;
+
     @PostMapping(value = "/generate", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> generate(@RequestBody AiGenerateDTOContainer requestBody) throws Exception {
-        AiGenerateDTOContainer returnValue = aiRagService.generate(requestBody);
+        // AiGenerateDTOContainer returnValue = aiRagService.generate(requestBody);
+        AiGenerateDTOContainer returnValue = new AiGenerateDTOContainer();
+        returnValue.setAiGenerateDTO(aiSearchService.generate(requestBody.getAiGenerateDTO()));
         return new ResponseEntity<>(returnValue, HttpStatus.OK);
     }
 

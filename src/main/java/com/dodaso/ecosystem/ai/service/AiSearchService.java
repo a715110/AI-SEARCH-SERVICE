@@ -1,6 +1,7 @@
 package com.dodaso.ecosystem.ai.service;
 
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
+import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchSyncDTO;
 import com.dodaso.ecosystem.ai.entity.EcwsEmbedding;
@@ -91,6 +92,67 @@ private final ChatClient chatClient = null;
         log.info("Searching for: '{}' in project: {}, workspace: {}", query, projectId, workspaceId);
         long start = System.currentTimeMillis();
 
+        List<AiSearchResultDTO> results = findResults(projectId, query);
+        List<Long> sourceIds = new ArrayList<>();
+        for (AiSearchResultDTO result : results) {
+            sourceIds.add(result.getSourceId());
+        }
+
+        // 4. Log search history
+        EcwsSearchHistory history = new EcwsSearchHistory();
+        history.setQueryText(query);
+        history.setResultIds(sourceIds.toString());
+        history.setResultCount(results.size());
+        history.setSearchLatencyMs(System.currentTimeMillis() - start);
+        history.setProjectId(projectId);
+        history.setTopK(10);
+        history.setWorkspaceId(workspaceId);
+        history.setCreatedByUserId(1L);  // placeholder
+        history.setUpdatedByUserId(1L);  // placeholder
+        history.setUserId(1L); // Placeholder for current user, could be passed in search method
+        searchHistoryRepository.save(history);
+
+        return results;
+    }
+
+    /**
+     * Answers a prompt from the same results search() returns for its search text (the prompt
+     * when none is sent), and returns those results as the answer's sources so the page can link
+     * the [n] citations. Earlier turns in the request's history are passed to the model.
+     */
+    public AiGenerateDTO generate(AiGenerateDTO request) {
+        if (request == null || request.getGeneratePrompt() == null
+            || request.getGeneratePrompt().trim().isEmpty()) {
+            throw new IllegalArgumentException("Prompt is empty");
+        }
+        if (request.getProjectId() == null) {
+            throw new IllegalArgumentException("Project is required");
+        }
+        String prompt = request.getGeneratePrompt().trim();
+        long start = System.currentTimeMillis();
+
+        // List<AiSearchResultDTO> sources = findResults(request.getProjectId(), prompt);
+        String searchText = request.getSearchText() != null && !request.getSearchText().trim().isEmpty()
+            ? request.getSearchText().trim() : prompt;
+        List<AiSearchResultDTO> sources = findResults(request.getProjectId(), searchText);
+        // String answer = aiRagService.answer(prompt, sources);
+        String answer = aiRagService.answer(prompt, sources, request.getHistory());
+        log.info("Generated answer from {} source(s) in {} ms for project {}",
+            sources.size(), System.currentTimeMillis() - start, request.getProjectId());
+
+        AiGenerateDTO response = new AiGenerateDTO();
+        response.setGeneratePrompt(prompt);
+        response.setGeneratedText(answer);
+        response.setProjectId(request.getProjectId());
+        response.setSources(sources);
+        return response;
+    }
+
+    /**
+     * Closest results for a query, at most RESULT_LIMIT, each linked to its task. Used by search
+     * and by generate, which answers from these same results. Doesn't write search history.
+     */
+    List<AiSearchResultDTO> findResults(Long projectId, String query) {
         // 1. Get embedding for query
         float[] queryVector = ollamaService.getOllamaEmbedding(query);
 
@@ -112,7 +174,6 @@ private final ChatClient chatClient = null;
 
         // 3. Map to DTOs
         List<AiSearchResultDTO> results = new ArrayList<>();
-        List<Long> sourceIds = new ArrayList<>();
         for (EcwsEmbedding emb : similar) {
             if (results.size() >= RESULT_LIMIT) {
                 break;
@@ -132,23 +193,7 @@ private final ChatClient chatClient = null;
                 .chunkText(emb.getChunkText())
                 .score(0.95) // Placeholder score
                 .build());
-            sourceIds.add(emb.getSourceId());
         }
-
-        // 4. Log search history
-        EcwsSearchHistory history = new EcwsSearchHistory();
-        history.setQueryText(query);
-        history.setResultIds(sourceIds.toString());
-        history.setResultCount(results.size());
-        history.setSearchLatencyMs(System.currentTimeMillis() - start);
-        history.setProjectId(projectId);
-        history.setTopK(10);
-        history.setWorkspaceId(workspaceId);
-        history.setCreatedByUserId(1L);  // placeholder
-        history.setUpdatedByUserId(1L);  // placeholder
-        history.setUserId(1L); // Placeholder for current user, could be passed in search method
-        searchHistoryRepository.save(history);
-
         return results;
     }
 

@@ -87,7 +87,8 @@ class AiSearchGenerateTest {
             emb(COMMENT, 40L, 12L, "Login fails on Safari")));
         // when(ragService.answer(eq("login issue"), any())).thenReturn("Safari login fails [2].");
         // when(ragService.answer(eq("login issue"), any(), any())).thenReturn("Safari login fails [2].");
-        when(ragService.answer(eq("login issue"), any(), any(), any())).thenReturn("Safari login fails [2].");
+        // when(ragService.answer(eq("login issue"), any(), any(), any())).thenReturn("Safari login fails [2].");
+        when(ragService.answer(eq("login issue"), any(), any(), any(), any())).thenReturn("Safari login fails [2].");
 
         AiGenerateDTO response = searchService.generate(request("  login issue ", 1L));
 
@@ -97,7 +98,8 @@ class AiSearchGenerateTest {
         assertEquals(40L, response.getSources().get(1).getSourceId());
         // verify(ragService).answer("login issue", response.getSources());
         // verify(ragService).answer("login issue", response.getSources(), null);
-        verify(ragService).answer("login issue", response.getSources(), null, List.of());
+        // verify(ragService).answer("login issue", response.getSources(), null, List.of());
+        verify(ragService).answer("login issue", response.getSources(), null, List.of(), null);
         // generate is not a search; it doesn't add a history row
         verifyNoInteractions(searchHistoryRepository);
     }
@@ -115,7 +117,8 @@ class AiSearchGenerateTest {
 
         verify(ollamaService).getOllamaEmbedding("login issue what about Safari?");
         // verify(ragService).answer(eq("what about Safari?"), any(), eq(history));
-        verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any());
+        // verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any());
+        verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any(), any());
     }
 
     @Test
@@ -240,8 +243,10 @@ class AiSearchGenerateTest {
         when(embeddingRepository.findSimilarAll(eq(1L), anyString(), anyInt())).thenReturn(List.of(
             emb(TASK, 12L, 12L, "Fix the login page"),
             emb(COMMENT, 40L, 12L, "Login fails on Safari")));
+        AiAlertDTO pastDue = alert(9, "workflow", 3, "Approval past due");
         AiAlertDTO mine = alert(1, "workflow", 7, "Approval due");
         AiAlertDTO onTask = alert(2, EarsAlertService.TASK_TABLE, 12, "Task past due");
+        when(earsAlertService.findUserPastDueAlerts("kim")).thenReturn(List.of(pastDue, onTask));
         when(earsAlertService.findUserAlerts("kim")).thenReturn(List.of(mine, onTask));
         when(earsAlertService.findTaskAlerts(List.of(12L, 12L))).thenReturn(List.of(onTask));
         AiGenerateDTO request = request("what is overdue?", 1L);
@@ -249,8 +254,43 @@ class AiSearchGenerateTest {
 
         AiGenerateDTO response = searchService.generate(request);
 
-        assertEquals(List.of(mine, onTask), response.getAlerts());
-        verify(ragService).answer(eq("what is overdue?"), any(), any(), eq(List.of(mine, onTask)));
+        // past-due first, so they are never cut off by MAX_ANSWER_ALERTS
+        assertEquals(List.of(pastDue, onTask, mine), response.getAlerts());
+        // verify(ragService).answer(eq("what is overdue?"), any(), any(), eq(List.of(mine, onTask)));
+        verify(ragService).answer(eq("what is overdue?"), any(), any(),
+            eq(List.of(pastDue, onTask, mine)), eq("kim"));
+    }
+
+    @Test
+    void promptSaysWhoEachAlertWasSentTo() {
+        AiAlertDTO toUser = AiAlertDTO.builder().id(1).sourceReferenceTable(EarsAlertService.TASK_TABLE)
+            .sourceReferenceId(82).recipientValue("Alice@dodaso.com")
+            .createdAt(java.time.Instant.parse("2026-01-20T12:00:00Z")).subject("Task Past Due").build();
+        AiAlertDTO toOther = AiAlertDTO.builder().id(2).sourceReferenceTable(EarsAlertService.TASK_TABLE)
+            .sourceReferenceId(82).recipientValue("eric@dodaso.com").subject("Task Past Due").build();
+
+        String prompt = AiRagService.buildAnswerPrompt("q", List.of(), List.of(toUser, toOther), null,
+            "alice@dodaso.com");
+
+        assertTrue(prompt.contains("- Task #82, sent 2026-01-20 to you: Task Past Due\n"));
+        assertTrue(prompt.contains("- Task #82, sent to eric@dodaso.com: Task Past Due\n"));
+        // without a login id nothing is "to you"
+        assertFalse(AiRagService.buildAnswerPrompt("q", List.of(), List.of(toUser), null, null)
+            .contains("to you"));
+    }
+
+    @Test
+    void answerTellsTheModelNotToOfferActions() {
+        ChatClient openAiClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        AiRagService realRag = new AiRagService(mock(ChatClient.class), embeddingRepository, ollamaService);
+        ReflectionTestUtils.setField(realRag, "openAiChatClient", openAiClient);
+        org.mockito.ArgumentCaptor<String> system = org.mockito.ArgumentCaptor.forClass(String.class);
+
+        realRag.answer("q", List.of(), null, List.of(alert(1, "workflow", 7, "Approval due")), "kim");
+
+        verify(openAiClient.prompt()).system(system.capture());
+        assertTrue(system.getValue().contains("Don't offer to take actions"));
+        assertTrue(system.getValue().contains("\"sent to you\""));
     }
 
     @Test

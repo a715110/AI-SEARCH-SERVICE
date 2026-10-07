@@ -7,7 +7,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import lombok.Data;
@@ -39,6 +41,9 @@ public class EarsAlertService {
     // Newest alerts asked for per lookup, so a long alert history can't fill the prompt
     static final int MAX_ALERTS = 20;
 
+    // Past-due alerts asked for before repeats are collapsed to one per task or approval
+    static final int MAX_PAST_DUE_FETCHED = 100;
+
     // A slow EARS delays the answer by at most this, instead of the client's 1-minute default
     private static final Duration RESPONSE_TIMEOUT = Duration.ofSeconds(10);
 
@@ -54,6 +59,26 @@ public class EarsAlertService {
         // "%40" as "%2540".
         return fetch(RECIPIENT_ENDPOINT + "?loginId=" + loginId.trim() + "&size=" + MAX_ALERTS,
             "user " + loginId);
+    }
+
+    /**
+     * The user's unread task, approval and review past-due alerts, however old, so they aren't
+     * crowded out of findUserAlerts by newer activity notices. EARS repeats a past-due alert while
+     * the item stays overdue; only the newest one per task or approval is kept.
+     */
+    public List<AiAlertDTO> findUserPastDueAlerts(String loginId) {
+        if (loginId == null || loginId.trim().isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<AiAlertDTO> repeated = fetch(RECIPIENT_ENDPOINT + "?loginId=" + loginId.trim()
+            + "&unreadPastDueOnly=true&size=" + MAX_PAST_DUE_FETCHED, "past due of user " + loginId);
+        Map<String, AiAlertDTO> newestPerSource = new LinkedHashMap<>();
+        for (AiAlertDTO alert : repeated) {
+            // Newest first from EARS, so the first alert per source is its newest
+            newestPerSource.putIfAbsent(alert.getSourceReferenceTable() + "#" + alert.getSourceReferenceId()
+                + "#" + alert.getSubject(), alert);
+        }
+        return newestPerSource.values().stream().limit(MAX_ALERTS).collect(Collectors.toList());
     }
 
     /** The newest active alerts and reminders about these tasks. */

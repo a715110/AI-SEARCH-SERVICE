@@ -111,10 +111,17 @@ public class AiRagService {
         An "Alerts and reminders" list may follow the sources; it comes from the notification \
         system. Use it for questions about due dates, overdue items, deadlines and reminders, \
         naming the task (for example Task #12) instead of a [n] citation. Alerts are not \
-        sources: never cite them with [n].""";
+        sources: never cite them with [n]. Each alert says who it was sent to: only alerts \
+        "sent to you" are the user's; call the others alerts sent to that person.""";
 
-    // Alerts listed in the prompt: the user's and the source tasks' (EarsAlertService.MAX_ALERTS each)
-    static final int MAX_ANSWER_ALERTS = 2 * EarsAlertService.MAX_ALERTS;
+    private static final String NO_ACTIONS_INSTRUCTIONS = """
+        You can only answer and write text. Don't offer to take actions such as marking alerts \
+        as read, approving, opening files or sending messages.""";
+
+    // Alerts listed in the prompt: the user's past-due and newest ones, and the source tasks'
+    // (EarsAlertService.MAX_ALERTS each)
+    // static final int MAX_ANSWER_ALERTS = 2 * EarsAlertService.MAX_ALERTS;
+    static final int MAX_ANSWER_ALERTS = 3 * EarsAlertService.MAX_ALERTS;
 
     // Earlier turns sent with a follow-up; older ones are dropped to keep the prompt small
     static final int MAX_HISTORY_TURNS = 3;
@@ -156,15 +163,26 @@ public class AiRagService {
      */
     public String answer(String question, List<AiSearchResultDTO> sources, List<AiChatTurnDTO> history,
         List<AiAlertDTO> alerts) {
+        return answer(question, sources, history, alerts, null);
+    }
+
+    /**
+     * Same as answer(question, sources, history, alerts); alerts sent to loginId are shown as
+     * "sent to you", the others with their recipient's login id.
+     */
+    public String answer(String question, List<AiSearchResultDTO> sources, List<AiChatTurnDTO> history,
+        List<AiAlertDTO> alerts, String loginId) {
         // if (sources == null || sources.isEmpty()) {
         if ((sources == null || sources.isEmpty()) && (alerts == null || alerts.isEmpty())) {
             return NOTHING_FOUND;
         }
         return openAiChatClient.prompt()
             // .system(ANSWER_INSTRUCTIONS)
-            .system(ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS)
+            // .system(ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS)
+            .system(ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS)
             // .user(buildAnswerPrompt(question, sources))
-            .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now()))
+            // .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now()))
+            .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now(), loginId))
             .messages(historyMessages(history))
             .call()
             .content();
@@ -198,12 +216,17 @@ public class AiRagService {
         return buildAnswerPrompt(question, sources, null, null);
     }
 
+    static String buildAnswerPrompt(String question, List<AiSearchResultDTO> sources,
+        List<AiAlertDTO> alerts, LocalDate today) {
+        return buildAnswerPrompt(question, sources, alerts, today, null);
+    }
+
     /**
      * The numbered sources, then the alerts (unnumbered, so [n] still means sources.get(n - 1))
      * with today's date so the model can tell what is overdue, then the question.
      */
     static String buildAnswerPrompt(String question, List<AiSearchResultDTO> sources,
-        List<AiAlertDTO> alerts, LocalDate today) {
+        List<AiAlertDTO> alerts, LocalDate today, String loginId) {
         if (sources == null) {
             sources = List.of();
         }
@@ -230,15 +253,17 @@ public class AiRagService {
             }
             prompt.append(":\n");
             for (AiAlertDTO alert : alerts.subList(0, Math.min(alerts.size(), MAX_ANSWER_ALERTS))) {
-                prompt.append("- ").append(alertLine(alert)).append('\n');
+                // prompt.append("- ").append(alertLine(alert)).append('\n');
+                prompt.append("- ").append(alertLine(alert, loginId)).append('\n');
             }
             prompt.append('\n');
         }
         return prompt.append("Question: ").append(question).toString();
     }
 
-    // "Task #12, High, sent 2026-10-01, unread: Task past due - The task is 3 days overdue."
-    private static String alertLine(AiAlertDTO alert) {
+    // "Task #12, High, sent 2026-10-01 to you, unread: Task past due - The task is 3 days overdue."
+    // private static String alertLine(AiAlertDTO alert) {
+    private static String alertLine(AiAlertDTO alert, String loginId) {
         StringBuilder line = new StringBuilder();
         if (EarsAlertService.TASK_TABLE.equals(alert.getSourceReferenceTable())) {
             line.append("Task #").append(alert.getSourceReferenceId());
@@ -252,6 +277,12 @@ public class AiRagService {
         }
         if (alert.getCreatedAt() != null) {
             line.append(", sent ").append(alert.getCreatedAt().atZone(ZoneId.systemDefault()).toLocalDate());
+        }
+        if (alert.getRecipientValue() != null) {
+            boolean toUser = loginId != null
+                && alert.getRecipientValue().trim().equalsIgnoreCase(loginId.trim());
+            line.append(alert.getCreatedAt() != null ? " to " : ", sent to ")
+                .append(toUser ? "you" : alert.getRecipientValue());
         }
         if (alert.getReadInd() != null) {
             line.append(alert.getReadInd() == 1 ? ", read" : ", unread");

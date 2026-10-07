@@ -62,7 +62,27 @@ class EarsAlertServiceTest {
     }
 
     @Test
+    void pastDueAlertsKeepTheNewestPerTaskOrApproval() throws Exception {
+        AiAlertDTO task82New = AiAlertDTO.builder().id(30).sourceReferenceTable("collaboration_task")
+            .sourceReferenceId(82).subject("Alert: Task Past Due").build();
+        AiAlertDTO task82Old = AiAlertDTO.builder().id(10).sourceReferenceTable("collaboration_task")
+            .sourceReferenceId(82).subject("Alert: Task Past Due").build();
+        AiAlertDTO approval7 = AiAlertDTO.builder().id(20).sourceReferenceTable("workflow")
+            .sourceReferenceId(7).subject("Alert: Approval Past Due").build();
+        AiAlertDTO review7 = AiAlertDTO.builder().id(21).sourceReferenceTable("workflow")
+            .sourceReferenceId(7).subject("Alert: Review Past Due").build();
+        when(restServiceClient.callRESTService(eq("ears_service"),
+            eq("/eventReminderController/event-alert-reminder/recipient?loginId=kim"
+                + "&unreadPastDueOnly=true&size=" + EarsAlertService.MAX_PAST_DUE_FETCHED),
+            isNull(), any(), eq(HttpMethod.GET), isNull(), any()))
+            .thenReturn(page(task82New, approval7, task82Old, review7));
+
+        assertEquals(List.of(task82New, approval7, review7), service.findUserPastDueAlerts("kim"));
+    }
+
+    @Test
     void nothingToLookUpMakesNoCall() {
+        assertTrue(service.findUserPastDueAlerts(null).isEmpty());
         assertTrue(service.findUserAlerts(null).isEmpty());
         assertTrue(service.findUserAlerts("  ").isEmpty());
         assertTrue(service.findTaskAlerts(List.of()).isEmpty());

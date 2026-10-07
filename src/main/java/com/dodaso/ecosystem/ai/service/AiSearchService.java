@@ -143,7 +143,9 @@ private final ChatClient chatClient = null;
         List<AiAlertDTO> alerts = findAlerts(request.getLoginId(), sources);
         // String answer = aiRagService.answer(prompt, sources);
         // String answer = aiRagService.answer(prompt, sources, request.getHistory());
-        String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts);
+        // String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts);
+        String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts,
+            request.getLoginId());
         // log.info("Generated answer from {} source(s) in {} ms for project {}",
         //     sources.size(), System.currentTimeMillis() - start, request.getProjectId());
         log.info("Generated answer from {} source(s) and {} alert(s) in {} ms for project {}",
@@ -159,12 +161,14 @@ private final ChatClient chatClient = null;
     }
 
     /**
-     * EARS alerts for an answer: the user's own (when the request has a login id) and those on
-     * the source tasks, once each, the user's first.
+     * EARS alerts for an answer: the user's unread past-due ones and newest ones (when the request
+     * has a login id), then those on the source tasks, once each, in that order.
      */
     List<AiAlertDTO> findAlerts(String loginId, List<AiSearchResultDTO> sources) {
         Map<Integer, AiAlertDTO> byId = new LinkedHashMap<>();
-        List<AiAlertDTO> found = new ArrayList<>(earsAlertService.findUserAlerts(loginId));
+        // List<AiAlertDTO> found = new ArrayList<>(earsAlertService.findUserAlerts(loginId));
+        List<AiAlertDTO> found = new ArrayList<>(earsAlertService.findUserPastDueAlerts(loginId));
+        found.addAll(earsAlertService.findUserAlerts(loginId));
         found.addAll(earsAlertService.findTaskAlerts(
             sources.stream().map(AiSearchResultDTO::getTaskId).collect(Collectors.toList())));
         for (AiAlertDTO alert : found) {

@@ -172,21 +172,50 @@ public class AiRagService {
      */
     public String answer(String question, List<AiSearchResultDTO> sources, List<AiChatTurnDTO> history,
         List<AiAlertDTO> alerts, String loginId) {
+        return answer(question, sources, history, alerts, loginId, null);
+    }
+
+    /**
+     * Same as answer(question, sources, history, alerts, loginId), with the text of the files the
+     * user attached to the question listed after the alerts. With attached files but no sources
+     * or alerts the model is still called, so "summarize this file" can be answered.
+     */
+    public String answer(String question, List<AiSearchResultDTO> sources, List<AiChatTurnDTO> history,
+        List<AiAlertDTO> alerts, String loginId, List<AttachedFile> files) {
         // if (sources == null || sources.isEmpty()) {
-        if ((sources == null || sources.isEmpty()) && (alerts == null || alerts.isEmpty())) {
+        // if ((sources == null || sources.isEmpty()) && (alerts == null || alerts.isEmpty())) {
+        if ((sources == null || sources.isEmpty()) && (alerts == null || alerts.isEmpty())
+            && (files == null || files.isEmpty())) {
             return NOTHING_FOUND;
+        }
+        String system = ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS;
+        if (files != null && !files.isEmpty()) {
+            system += " " + FILE_INSTRUCTIONS;
         }
         return openAiChatClient.prompt()
             // .system(ANSWER_INSTRUCTIONS)
             // .system(ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS)
-            .system(ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS)
+            // .system(ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS)
+            .system(system)
             // .user(buildAnswerPrompt(question, sources))
             // .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now()))
-            .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now(), loginId))
+            // .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now(), loginId))
+            .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now(), loginId, files))
             .messages(historyMessages(history))
             .call()
             .content();
     }
+
+    /** A file the user attached to the question; text is null when it couldn't be read. */
+    public record AttachedFile(String fileName, String text) {}
+
+    private static final String FILE_INSTRUCTIONS = """
+        An "Attached files" list may follow; these are files the user attached to this question. \
+        Use them like sources, but name the file (for example "report.pdf") instead of a [n] \
+        citation. If a file couldn't be read, say so.""";
+
+    // Text kept per attached file, so a few large files still fit the prompt
+    static final int MAX_FILE_CHARS = 20000;
 
     /**
      * Earlier turns as messages, oldest first. Their [n] citations are removed: they numbered that
@@ -227,6 +256,15 @@ public class AiRagService {
      */
     static String buildAnswerPrompt(String question, List<AiSearchResultDTO> sources,
         List<AiAlertDTO> alerts, LocalDate today, String loginId) {
+        return buildAnswerPrompt(question, sources, alerts, today, loginId, null);
+    }
+
+    /**
+     * Same as buildAnswerPrompt(question, sources, alerts, today, loginId), with the attached
+     * files' text (unnumbered, cut at MAX_FILE_CHARS) after the alerts.
+     */
+    static String buildAnswerPrompt(String question, List<AiSearchResultDTO> sources,
+        List<AiAlertDTO> alerts, LocalDate today, String loginId, List<AttachedFile> files) {
         if (sources == null) {
             sources = List.of();
         }
@@ -257,6 +295,22 @@ public class AiRagService {
                 prompt.append("- ").append(alertLine(alert, loginId)).append('\n');
             }
             prompt.append('\n');
+        }
+        if (files != null && !files.isEmpty()) {
+            prompt.append("Attached files:\n");
+            for (AttachedFile file : files) {
+                prompt.append("--- ").append(file.fileName()).append(" ---\n");
+                String text = file.text();
+                if (text == null || text.isBlank()) {
+                    prompt.append("(this file couldn't be read)\n\n");
+                    continue;
+                }
+                text = text.trim();
+                if (text.length() > MAX_FILE_CHARS) {
+                    text = text.substring(0, MAX_FILE_CHARS) + "...";
+                }
+                prompt.append(text).append("\n\n");
+            }
         }
         return prompt.append("Question: ").append(question).toString();
     }

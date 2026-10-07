@@ -19,6 +19,7 @@ import static org.mockito.Mockito.when;
 
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
 import com.dodaso.ecosystem.ai.dto.AiAlertDTO;
+import com.dodaso.ecosystem.ai.dto.AiChatFileDTO;
 import com.dodaso.ecosystem.ai.dto.AiChatTurnDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
@@ -63,6 +64,7 @@ class AiSearchGenerateTest {
         ReflectionTestUtils.setField(searchService, "ollamaService", ollamaService);
         ReflectionTestUtils.setField(searchService, "aiRagService", ragService);
         ReflectionTestUtils.setField(searchService, "earsAlertService", earsAlertService);
+        ReflectionTestUtils.setField(searchService, "fileTextExtractorService", new FileTextExtractorService());
     }
 
     private static EcwsEmbedding emb(String type, Long sourceId, Long taskId, String text) {
@@ -88,7 +90,8 @@ class AiSearchGenerateTest {
         // when(ragService.answer(eq("login issue"), any())).thenReturn("Safari login fails [2].");
         // when(ragService.answer(eq("login issue"), any(), any())).thenReturn("Safari login fails [2].");
         // when(ragService.answer(eq("login issue"), any(), any(), any())).thenReturn("Safari login fails [2].");
-        when(ragService.answer(eq("login issue"), any(), any(), any(), any())).thenReturn("Safari login fails [2].");
+        // when(ragService.answer(eq("login issue"), any(), any(), any(), any())).thenReturn("Safari login fails [2].");
+        when(ragService.answer(eq("login issue"), any(), any(), any(), any(), any())).thenReturn("Safari login fails [2].");
 
         AiGenerateDTO response = searchService.generate(request("  login issue ", 1L));
 
@@ -99,7 +102,8 @@ class AiSearchGenerateTest {
         // verify(ragService).answer("login issue", response.getSources());
         // verify(ragService).answer("login issue", response.getSources(), null);
         // verify(ragService).answer("login issue", response.getSources(), null, List.of());
-        verify(ragService).answer("login issue", response.getSources(), null, List.of(), null);
+        // verify(ragService).answer("login issue", response.getSources(), null, List.of(), null);
+        verify(ragService).answer("login issue", response.getSources(), null, List.of(), null, List.of());
         // generate is not a search; it doesn't add a history row
         verifyNoInteractions(searchHistoryRepository);
     }
@@ -118,7 +122,8 @@ class AiSearchGenerateTest {
         verify(ollamaService).getOllamaEmbedding("login issue what about Safari?");
         // verify(ragService).answer(eq("what about Safari?"), any(), eq(history));
         // verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any());
-        verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any(), any());
+        // verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any(), any());
+        verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any(), any(), any());
     }
 
     @Test
@@ -257,8 +262,10 @@ class AiSearchGenerateTest {
         // past-due first, so they are never cut off by MAX_ANSWER_ALERTS
         assertEquals(List.of(pastDue, onTask, mine), response.getAlerts());
         // verify(ragService).answer(eq("what is overdue?"), any(), any(), eq(List.of(mine, onTask)));
+        // verify(ragService).answer(eq("what is overdue?"), any(), any(),
+        //     eq(List.of(pastDue, onTask, mine)), eq("kim"));
         verify(ragService).answer(eq("what is overdue?"), any(), any(),
-            eq(List.of(pastDue, onTask, mine)), eq("kim"));
+            eq(List.of(pastDue, onTask, mine)), eq("kim"), any());
     }
 
     @Test
@@ -335,5 +342,49 @@ class AiSearchGenerateTest {
 
         assertTrue(prompt.startsWith(
             "Sources:\n(none)\n\nAlerts and reminders:\n- workflow #7: Approval due\n"));
+    }
+
+    @Test
+    void attachedFilesAreReadAndPassedToTheAnswer() {
+        AiGenerateDTO request = request("summarize this", 1L);
+        request.setFiles(List.of(
+            new AiChatFileDTO("notes.txt", "Release is on Friday".getBytes()),
+            new AiChatFileDTO("photo.png", new byte[] {1, 2, 3})));
+
+        searchService.generate(request);
+
+        verify(ragService).answer(eq("summarize this"), any(), any(), any(), any(), eq(List.of(
+            new AiRagService.AttachedFile("notes.txt", "Release is on Friday"),
+            new AiRagService.AttachedFile("photo.png", null))));
+    }
+
+    @Test
+    void promptListsAttachedFilesAfterAlertsAndShortensThem() {
+        String prompt = AiRagService.buildAnswerPrompt("q", List.of(),
+            List.of(alert(1, "workflow", 7, "Approval due")), null, null, List.of(
+                new AiRagService.AttachedFile("notes.txt", " Release is on Friday \n"),
+                new AiRagService.AttachedFile("photo.png", null),
+                new AiRagService.AttachedFile("big.txt", "y".repeat(AiRagService.MAX_FILE_CHARS + 5))));
+
+        assertTrue(prompt.contains("Attached files:\n--- notes.txt ---\nRelease is on Friday\n\n"
+            + "--- photo.png ---\n(this file couldn't be read)\n\n"));
+        assertTrue(prompt.contains("y".repeat(AiRagService.MAX_FILE_CHARS) + "..."));
+        assertFalse(prompt.contains("y".repeat(AiRagService.MAX_FILE_CHARS + 1)));
+        assertTrue(prompt.indexOf("Alerts and reminders") < prompt.indexOf("Attached files"));
+        assertTrue(prompt.endsWith("Question: q"));
+    }
+
+    @Test
+    void attachedFilesWithoutSourcesStillCallTheModel() {
+        ChatClient openAiClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        when(openAiClient.prompt().system(anyString()).user(anyString()).messages(anyList()).call().content())
+            .thenReturn("The release is on Friday.");
+        AiRagService realRag = new AiRagService(mock(ChatClient.class), embeddingRepository, ollamaService);
+        ReflectionTestUtils.setField(realRag, "openAiChatClient", openAiClient);
+
+        String answer = realRag.answer("when is the release?", List.of(), null, List.of(), null,
+            List.of(new AiRagService.AttachedFile("notes.txt", "Release is on Friday")));
+
+        assertEquals("The release is on Friday.", answer);
     }
 }

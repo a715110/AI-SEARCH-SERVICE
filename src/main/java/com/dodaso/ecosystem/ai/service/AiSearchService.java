@@ -2,6 +2,7 @@ package com.dodaso.ecosystem.ai.service;
 
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
 import com.dodaso.ecosystem.ai.dto.AiAlertDTO;
+import com.dodaso.ecosystem.ai.dto.AiChatFileDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchSyncDTO;
@@ -17,6 +18,7 @@ import com.dodaso.ecosystem.baseline.common.container.RESTReqContainer;
 import com.dodaso.ecosystem.baseline.common.proxy.RESTServiceClient;
 import com.dodaso.ecosystem.ecws.container.CollaborationTaskDTOContainer;
 import com.dodaso.ecosystem.ecws.dto.CollaborationTaskDTO;
+import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -63,6 +65,9 @@ public class AiSearchService {
 
     @Autowired
     EarsAlertService earsAlertService;
+
+    @Autowired
+    FileTextExtractorService fileTextExtractorService;
 
     @Autowired
     VectorStore vectorStore;
@@ -144,12 +149,18 @@ private final ChatClient chatClient = null;
         // String answer = aiRagService.answer(prompt, sources);
         // String answer = aiRagService.answer(prompt, sources, request.getHistory());
         // String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts);
+        // String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts,
+        //     request.getLoginId());
+        List<AiRagService.AttachedFile> files = extractFiles(request.getFiles());
         String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts,
-            request.getLoginId());
+            request.getLoginId(), files);
         // log.info("Generated answer from {} source(s) in {} ms for project {}",
         //     sources.size(), System.currentTimeMillis() - start, request.getProjectId());
-        log.info("Generated answer from {} source(s) and {} alert(s) in {} ms for project {}",
-            sources.size(), alerts.size(), System.currentTimeMillis() - start, request.getProjectId());
+        // log.info("Generated answer from {} source(s) and {} alert(s) in {} ms for project {}",
+        //     sources.size(), alerts.size(), System.currentTimeMillis() - start, request.getProjectId());
+        log.info("Generated answer from {} source(s), {} alert(s) and {} attached file(s) in {} ms for project {}",
+            sources.size(), alerts.size(), files.size(), System.currentTimeMillis() - start,
+            request.getProjectId());
 
         AiGenerateDTO response = new AiGenerateDTO();
         response.setGeneratePrompt(prompt);
@@ -158,6 +169,31 @@ private final ChatClient chatClient = null;
         response.setSources(sources);
         response.setAlerts(alerts);
         return response;
+    }
+
+    /**
+     * The text of the files attached to a question. A file that can't be read (an image, an
+     * unsupported type, a broken document) is kept with null text, so the answer can say so.
+     */
+    List<AiRagService.AttachedFile> extractFiles(List<AiChatFileDTO> files) {
+        List<AiRagService.AttachedFile> extracted = new ArrayList<>();
+        if (files == null) {
+            return extracted;
+        }
+        for (AiChatFileDTO file : files) {
+            if (file == null || file.getFileName() == null || file.getContent() == null) {
+                continue;
+            }
+            String text = null;
+            try {
+                text = fileTextExtractorService.extract(
+                    new ByteArrayInputStream(file.getContent()), file.getFileName());
+            } catch (Exception e) {
+                log.warn("Could not read attached file {}: {}", file.getFileName(), e.getMessage());
+            }
+            extracted.add(new AiRagService.AttachedFile(file.getFileName(), text));
+        }
+        return extracted;
     }
 
     /**

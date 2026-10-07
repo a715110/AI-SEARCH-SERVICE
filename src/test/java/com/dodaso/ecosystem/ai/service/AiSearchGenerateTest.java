@@ -18,6 +18,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
+import com.dodaso.ecosystem.ai.dto.AiAlertDTO;
 import com.dodaso.ecosystem.ai.dto.AiChatTurnDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
@@ -44,6 +45,7 @@ class AiSearchGenerateTest {
     private EcwsSearchHistoryRepository searchHistoryRepository;
     private OllamaService ollamaService;
     private AiRagService ragService;
+    private EarsAlertService earsAlertService;
     private AiSearchService searchService;
 
     @BeforeEach
@@ -52,6 +54,7 @@ class AiSearchGenerateTest {
         searchHistoryRepository = mock(EcwsSearchHistoryRepository.class);
         ollamaService = mock(OllamaService.class);
         ragService = mock(AiRagService.class);
+        earsAlertService = mock(EarsAlertService.class);
         when(ollamaService.getOllamaEmbedding(anyString())).thenReturn(new float[] {0.1f, 0.2f});
 
         searchService = new AiSearchService(mock(ChatModel.class));
@@ -59,6 +62,7 @@ class AiSearchGenerateTest {
         ReflectionTestUtils.setField(searchService, "searchHistoryRepository", searchHistoryRepository);
         ReflectionTestUtils.setField(searchService, "ollamaService", ollamaService);
         ReflectionTestUtils.setField(searchService, "aiRagService", ragService);
+        ReflectionTestUtils.setField(searchService, "earsAlertService", earsAlertService);
     }
 
     private static EcwsEmbedding emb(String type, Long sourceId, Long taskId, String text) {
@@ -82,7 +86,8 @@ class AiSearchGenerateTest {
             emb(TASK, 12L, 12L, "Fix the login page"),
             emb(COMMENT, 40L, 12L, "Login fails on Safari")));
         // when(ragService.answer(eq("login issue"), any())).thenReturn("Safari login fails [2].");
-        when(ragService.answer(eq("login issue"), any(), any())).thenReturn("Safari login fails [2].");
+        // when(ragService.answer(eq("login issue"), any(), any())).thenReturn("Safari login fails [2].");
+        when(ragService.answer(eq("login issue"), any(), any(), any())).thenReturn("Safari login fails [2].");
 
         AiGenerateDTO response = searchService.generate(request("  login issue ", 1L));
 
@@ -91,7 +96,8 @@ class AiSearchGenerateTest {
         assertEquals(12L, response.getSources().get(1).getTaskId());
         assertEquals(40L, response.getSources().get(1).getSourceId());
         // verify(ragService).answer("login issue", response.getSources());
-        verify(ragService).answer("login issue", response.getSources(), null);
+        // verify(ragService).answer("login issue", response.getSources(), null);
+        verify(ragService).answer("login issue", response.getSources(), null, List.of());
         // generate is not a search; it doesn't add a history row
         verifyNoInteractions(searchHistoryRepository);
     }
@@ -108,7 +114,8 @@ class AiSearchGenerateTest {
         searchService.generate(request);
 
         verify(ollamaService).getOllamaEmbedding("login issue what about Safari?");
-        verify(ragService).answer(eq("what about Safari?"), any(), eq(history));
+        // verify(ragService).answer(eq("what about Safari?"), any(), eq(history));
+        verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any());
     }
 
     @Test
@@ -221,5 +228,72 @@ class AiSearchGenerateTest {
         assertFalse(prompt.contains("[" + (AiRagService.MAX_ANSWER_SOURCES + 1) + "]"));
         assertTrue(prompt.contains("x".repeat(AiRagService.MAX_SOURCE_CHARS) + "..."));
         assertFalse(prompt.contains("x".repeat(AiRagService.MAX_SOURCE_CHARS + 1)));
+    }
+
+    private static AiAlertDTO alert(int id, String table, Integer sourceId, String subject) {
+        return AiAlertDTO.builder().id(id).sourceReferenceTable(table).sourceReferenceId(sourceId)
+            .subject(subject).build();
+    }
+
+    @Test
+    void addsUserAndTaskAlertsOnceEachAndReturnsThem() {
+        when(embeddingRepository.findSimilarAll(eq(1L), anyString(), anyInt())).thenReturn(List.of(
+            emb(TASK, 12L, 12L, "Fix the login page"),
+            emb(COMMENT, 40L, 12L, "Login fails on Safari")));
+        AiAlertDTO mine = alert(1, "workflow", 7, "Approval due");
+        AiAlertDTO onTask = alert(2, EarsAlertService.TASK_TABLE, 12, "Task past due");
+        when(earsAlertService.findUserAlerts("kim")).thenReturn(List.of(mine, onTask));
+        when(earsAlertService.findTaskAlerts(List.of(12L, 12L))).thenReturn(List.of(onTask));
+        AiGenerateDTO request = request("what is overdue?", 1L);
+        request.setLoginId("kim");
+
+        AiGenerateDTO response = searchService.generate(request);
+
+        assertEquals(List.of(mine, onTask), response.getAlerts());
+        verify(ragService).answer(eq("what is overdue?"), any(), any(), eq(List.of(mine, onTask)));
+    }
+
+    @Test
+    void alertsWithoutSourcesStillCallTheModel() {
+        ChatClient openAiClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        when(openAiClient.prompt().system(anyString()).user(anyString()).messages(anyList()).call().content())
+            .thenReturn("Task #12 is overdue.");
+        AiRagService realRag = new AiRagService(mock(ChatClient.class), embeddingRepository, ollamaService);
+        ReflectionTestUtils.setField(realRag, "openAiChatClient", openAiClient);
+
+        String answer = realRag.answer("what is overdue?", List.of(), null,
+            List.of(alert(2, EarsAlertService.TASK_TABLE, 12, "Task past due")));
+
+        assertEquals("Task #12 is overdue.", answer);
+        assertSame(AiRagService.NOTHING_FOUND, realRag.answer("q", List.of(), null, List.of()));
+    }
+
+    @Test
+    void promptListsAlertsAfterSourcesWithoutNumbers() {
+        List<AiSearchResultDTO> sources = List.of(AiSearchResultDTO.builder().sourceType(TASK)
+            .sourceId(12L).taskId(12L).chunkText("Fix the login page").build());
+        AiAlertDTO onTask = AiAlertDTO.builder().id(2).sourceReferenceTable(EarsAlertService.TASK_TABLE)
+            .sourceReferenceId(12).priority("High").readInd((byte) 0)
+            .subject("Task past due").body("Due  2026-10-01").build();
+
+        String prompt = AiRagService.buildAnswerPrompt("what is overdue?", sources,
+            List.of(onTask, alert(3, null, null, "Weekly reminder")), java.time.LocalDate.of(2026, 10, 6));
+
+        assertTrue(prompt.contains("[1] Task #12\nFix the login page"));
+        assertTrue(prompt.contains("Alerts and reminders (today is 2026-10-06):\n"
+            + "- Task #12, High, unread: Task past due - Due 2026-10-01\n"
+            + "- General: Weekly reminder\n"));
+        assertFalse(prompt.contains("[2]"));
+        assertTrue(prompt.indexOf("[1] Task #12") < prompt.indexOf("Alerts and reminders"));
+        assertTrue(prompt.endsWith("Question: what is overdue?"));
+    }
+
+    @Test
+    void promptWithoutSourcesSaysNone() {
+        String prompt = AiRagService.buildAnswerPrompt("q", List.of(),
+            List.of(alert(1, "workflow", 7, "Approval due")), null);
+
+        assertTrue(prompt.startsWith(
+            "Sources:\n(none)\n\nAlerts and reminders:\n- workflow #7: Approval due\n"));
     }
 }

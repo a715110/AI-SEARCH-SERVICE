@@ -1,6 +1,7 @@
 package com.dodaso.ecosystem.ai.service;
 
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
+import com.dodaso.ecosystem.ai.dto.AiAlertDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchSyncDTO;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
+import java.util.stream.Collectors;
 import org.springframework.ai.document.Document;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -58,6 +60,9 @@ public class AiSearchService {
 
     @Autowired
     AiRagService aiRagService;
+
+    @Autowired
+    EarsAlertService earsAlertService;
 
     @Autowired
     VectorStore vectorStore;
@@ -135,17 +140,39 @@ private final ChatClient chatClient = null;
         String searchText = request.getSearchText() != null && !request.getSearchText().trim().isEmpty()
             ? request.getSearchText().trim() : prompt;
         List<AiSearchResultDTO> sources = findResults(request.getProjectId(), searchText);
+        List<AiAlertDTO> alerts = findAlerts(request.getLoginId(), sources);
         // String answer = aiRagService.answer(prompt, sources);
-        String answer = aiRagService.answer(prompt, sources, request.getHistory());
-        log.info("Generated answer from {} source(s) in {} ms for project {}",
-            sources.size(), System.currentTimeMillis() - start, request.getProjectId());
+        // String answer = aiRagService.answer(prompt, sources, request.getHistory());
+        String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts);
+        // log.info("Generated answer from {} source(s) in {} ms for project {}",
+        //     sources.size(), System.currentTimeMillis() - start, request.getProjectId());
+        log.info("Generated answer from {} source(s) and {} alert(s) in {} ms for project {}",
+            sources.size(), alerts.size(), System.currentTimeMillis() - start, request.getProjectId());
 
         AiGenerateDTO response = new AiGenerateDTO();
         response.setGeneratePrompt(prompt);
         response.setGeneratedText(answer);
         response.setProjectId(request.getProjectId());
         response.setSources(sources);
+        response.setAlerts(alerts);
         return response;
+    }
+
+    /**
+     * EARS alerts for an answer: the user's own (when the request has a login id) and those on
+     * the source tasks, once each, the user's first.
+     */
+    List<AiAlertDTO> findAlerts(String loginId, List<AiSearchResultDTO> sources) {
+        Map<Integer, AiAlertDTO> byId = new LinkedHashMap<>();
+        List<AiAlertDTO> found = new ArrayList<>(earsAlertService.findUserAlerts(loginId));
+        found.addAll(earsAlertService.findTaskAlerts(
+            sources.stream().map(AiSearchResultDTO::getTaskId).collect(Collectors.toList())));
+        for (AiAlertDTO alert : found) {
+            if (alert != null) {
+                byId.putIfAbsent(alert.getId(), alert);
+            }
+        }
+        return new ArrayList<>(byId.values());
     }
 
     /**

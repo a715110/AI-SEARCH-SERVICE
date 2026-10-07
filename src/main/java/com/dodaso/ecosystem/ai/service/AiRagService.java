@@ -1,12 +1,15 @@
 package com.dodaso.ecosystem.ai.service;
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
 import com.dodaso.ecosystem.ai.container.AiGenerateDTOContainer;
+import com.dodaso.ecosystem.ai.dto.AiAlertDTO;
 import com.dodaso.ecosystem.ai.dto.AiChatTurnDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.entity.EcwsEmbedding;
 import com.dodaso.ecosystem.ai.repository.EcwsEmbeddingRepository;
 import com.dodaso.ecosystem.ai.util.VectorUtil;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -104,6 +107,15 @@ public class AiRagService {
         tasks; don't guess or use outside knowledge. Earlier messages in the conversation are only \
         there to understand follow-up questions; answer and cite from the numbered sources.""";
 
+    private static final String ALERT_INSTRUCTIONS = """
+        An "Alerts and reminders" list may follow the sources; it comes from the notification \
+        system. Use it for questions about due dates, overdue items, deadlines and reminders, \
+        naming the task (for example Task #12) instead of a [n] citation. Alerts are not \
+        sources: never cite them with [n].""";
+
+    // Alerts listed in the prompt: the user's and the source tasks' (EarsAlertService.MAX_ALERTS each)
+    static final int MAX_ANSWER_ALERTS = 2 * EarsAlertService.MAX_ALERTS;
+
     // Earlier turns sent with a follow-up; older ones are dropped to keep the prompt small
     static final int MAX_HISTORY_TURNS = 3;
 
@@ -134,12 +146,25 @@ public class AiRagService {
      * as user/assistant messages so a follow-up like "what about last month?" can be understood.
      */
     public String answer(String question, List<AiSearchResultDTO> sources, List<AiChatTurnDTO> history) {
-        if (sources == null || sources.isEmpty()) {
+        return answer(question, sources, history, null);
+    }
+
+    /**
+     * Same as answer(question, sources, history), with EARS alerts and reminders listed after the
+     * sources. With alerts but no sources the model is still called, so "what's overdue for me?"
+     * can be answered from the alerts alone.
+     */
+    public String answer(String question, List<AiSearchResultDTO> sources, List<AiChatTurnDTO> history,
+        List<AiAlertDTO> alerts) {
+        // if (sources == null || sources.isEmpty()) {
+        if ((sources == null || sources.isEmpty()) && (alerts == null || alerts.isEmpty())) {
             return NOTHING_FOUND;
         }
         return openAiChatClient.prompt()
-            .system(ANSWER_INSTRUCTIONS)
-            .user(buildAnswerPrompt(question, sources))
+            // .system(ANSWER_INSTRUCTIONS)
+            .system(ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS)
+            // .user(buildAnswerPrompt(question, sources))
+            .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now()))
             .messages(historyMessages(history))
             .call()
             .content();
@@ -170,7 +195,22 @@ public class AiRagService {
     }
 
     static String buildAnswerPrompt(String question, List<AiSearchResultDTO> sources) {
+        return buildAnswerPrompt(question, sources, null, null);
+    }
+
+    /**
+     * The numbered sources, then the alerts (unnumbered, so [n] still means sources.get(n - 1))
+     * with today's date so the model can tell what is overdue, then the question.
+     */
+    static String buildAnswerPrompt(String question, List<AiSearchResultDTO> sources,
+        List<AiAlertDTO> alerts, LocalDate today) {
+        if (sources == null) {
+            sources = List.of();
+        }
         StringBuilder prompt = new StringBuilder("Sources:\n");
+        if (sources.isEmpty()) {
+            prompt.append("(none)\n\n");
+        }
         for (int i = 0; i < Math.min(sources.size(), MAX_ANSWER_SOURCES); i++) {
             AiSearchResultDTO source = sources.get(i);
             prompt.append('[').append(i + 1).append("] Task #").append(source.getTaskId());
@@ -183,7 +223,44 @@ public class AiRagService {
             }
             prompt.append('\n').append(text).append("\n\n");
         }
+        if (alerts != null && !alerts.isEmpty()) {
+            prompt.append("Alerts and reminders");
+            if (today != null) {
+                prompt.append(" (today is ").append(today).append(')');
+            }
+            prompt.append(":\n");
+            for (AiAlertDTO alert : alerts.subList(0, Math.min(alerts.size(), MAX_ANSWER_ALERTS))) {
+                prompt.append("- ").append(alertLine(alert)).append('\n');
+            }
+            prompt.append('\n');
+        }
         return prompt.append("Question: ").append(question).toString();
+    }
+
+    // "Task #12, High, sent 2026-10-01, unread: Task past due - The task is 3 days overdue."
+    private static String alertLine(AiAlertDTO alert) {
+        StringBuilder line = new StringBuilder();
+        if (EarsAlertService.TASK_TABLE.equals(alert.getSourceReferenceTable())) {
+            line.append("Task #").append(alert.getSourceReferenceId());
+        } else if (alert.getSourceReferenceTable() != null) {
+            line.append(alert.getSourceReferenceTable()).append(" #").append(alert.getSourceReferenceId());
+        } else {
+            line.append("General");
+        }
+        if (alert.getPriority() != null) {
+            line.append(", ").append(alert.getPriority());
+        }
+        if (alert.getCreatedAt() != null) {
+            line.append(", sent ").append(alert.getCreatedAt().atZone(ZoneId.systemDefault()).toLocalDate());
+        }
+        if (alert.getReadInd() != null) {
+            line.append(alert.getReadInd() == 1 ? ", read" : ", unread");
+        }
+        line.append(": ").append(alert.getSubject() != null ? alert.getSubject() : "");
+        if (alert.getBody() != null && !alert.getBody().isBlank()) {
+            line.append(" - ").append(alert.getBody().trim().replaceAll("\\s+", " "));
+        }
+        return line.toString();
     }
 
     private boolean needsRag(@SuppressWarnings("unused") String question) {

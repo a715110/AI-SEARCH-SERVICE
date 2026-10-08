@@ -8,6 +8,7 @@ import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.entity.EcwsEmbedding;
 import com.dodaso.ecosystem.ai.repository.EcwsEmbeddingRepository;
 import com.dodaso.ecosystem.ai.util.VectorUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -20,6 +21,8 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.ResponseFormat;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
@@ -114,6 +117,20 @@ public class AiRagService {
         sources: never cite them with [n]. Each alert says who it was sent to: only alerts \
         "sent to you" are the user's; call the others alerts sent to that person.""";
 
+    // Hangul syllables, Jamo and compatibility Jamo
+    private static final Pattern HANGUL = Pattern.compile("[\\uAC00-\\uD7A3\\u1100-\\u11FF\\u3130-\\u318F]");
+
+    /**
+     * Tells the model which language to answer in: Korean when the question has Hangul, English
+     * otherwise. Decided here because the model, asked to match the question, often follows the
+     * sources instead and answers an English question in Korean when the tasks are in Korean.
+     */
+    static String languageInstructions(String question) {
+        String language = question != null && HANGUL.matcher(question).find() ? "Korean" : "English";
+        return "Write your answer in " + language + ", because the user's question is in " + language
+            + ". The language of the sources, alerts, attached files and earlier messages doesn't matter.";
+    }
+
     private static final String NO_ACTIONS_INSTRUCTIONS = """
         You can only answer and write text. Don't offer to take actions such as marking alerts \
         as read, approving, opening files or sending messages.""";
@@ -188,7 +205,9 @@ public class AiRagService {
             && (files == null || files.isEmpty())) {
             return NOTHING_FOUND;
         }
-        String system = ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS;
+        // String system = ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS;
+        String system = ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS
+            + " " + languageInstructions(question);
         if (files != null && !files.isEmpty()) {
             system += " " + FILE_INSTRUCTIONS;
         }
@@ -204,6 +223,91 @@ public class AiRagService {
             .messages(historyMessages(history))
             .call()
             .content();
+    }
+
+    /** An answer's chat text, and the file the user asked for (null when none). */
+    public record AiAnswer(String text, AiAnswerSpec.FileSpec file) {}
+
+    /**
+     * Same as answer(question, sources, history, alerts, loginId, files), but the model may also
+     * return a Word or Excel document spec when the user asks for a file. The model replies with
+     * AiAnswerSpec JSON; a reply that isn't valid JSON is used as the text, with no file. Without
+     * a loginId no file can be owned, so the plain text answer is used.
+     */
+    public AiAnswer answerWithFile(String question, List<AiSearchResultDTO> sources,
+        List<AiChatTurnDTO> history, List<AiAlertDTO> alerts, String loginId, List<AttachedFile> files) {
+        if (isBlank(loginId)) {
+            return new AiAnswer(answer(question, sources, history, alerts, loginId, files), null);
+        }
+        if ((sources == null || sources.isEmpty()) && (alerts == null || alerts.isEmpty())
+            && (files == null || files.isEmpty())) {
+            return new AiAnswer(NOTHING_FOUND, null);
+        }
+        // String system = ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS;
+        String system = ANSWER_INSTRUCTIONS + " " + ALERT_INSTRUCTIONS + " " + NO_ACTIONS_INSTRUCTIONS
+            + " " + languageInstructions(question);
+        if (files != null && !files.isEmpty()) {
+            system += " " + FILE_INSTRUCTIONS;
+        }
+        system += " " + FILE_OUTPUT_INSTRUCTIONS;
+        String reply = openAiChatClient.prompt()
+            .system(system)
+            .user(buildAnswerPrompt(question, sources, alerts, LocalDate.now(), loginId, files))
+            .messages(historyMessages(history))
+            .options(fileAnswerOptions())
+            .call()
+            .content();
+        return parseAnswer(reply);
+    }
+
+    private static final String FILE_OUTPUT_INSTRUCTIONS = """
+        Reply as JSON with "answer" and "file". "answer" is your reply in the chat. Set "file" only \
+        when the user asks for a file or document, such as a Word document or an Excel sheet (for \
+        example "as a Word file", "워드로 만들어줘", "엑셀로 정리해줘"); otherwise "file" is null. \
+        Formats: DOCX for documents, summaries and reports; XLSX for lists and tables. Put the \
+        content in the file's blocks and keep "answer" to 1-3 sentences saying what the file \
+        contains. An XLSX file needs at least one table block; each table \
+        becomes a sheet. Use only what is in the sources, alerts and attached files, and never \
+        invent rows that aren't there. Keep a table to at most 500 rows; if there is more, say in \
+        the answer that the file has the first 500. "fileName" is a short name without extension. \
+        You can't make other formats (PDF, PowerPoint, images); say so and set "file" to null.""";
+
+    // A file's content is in the reply, so it can be much longer than a plain answer
+    static final int FILE_ANSWER_MAX_TOKENS = 16000;
+
+    // Strict structured output: OpenAI replies with JSON that matches AiAnswerSpec.JSON_SCHEMA
+    private static OpenAiChatOptions fileAnswerOptions() {
+        return OpenAiChatOptions.builder()
+            .responseFormat(ResponseFormat.builder()
+                .type(ResponseFormat.Type.JSON_SCHEMA)
+                .jsonSchema(ResponseFormat.JsonSchema.builder()
+                    .name("answer_with_file")
+                    .schema(AiAnswerSpec.JSON_SCHEMA)
+                    .strict(true)
+                    .build())
+                .build())
+            .maxCompletionTokens(FILE_ANSWER_MAX_TOKENS)
+            .build();
+    }
+
+    private static final ObjectMapper ANSWER_MAPPER = new ObjectMapper();
+
+    /** The reply as AiAnswerSpec; a reply that isn't valid JSON, or has no answer, is the text. */
+    static AiAnswer parseAnswer(String reply) {
+        if (reply == null) {
+            return new AiAnswer(null, null);
+        }
+        try {
+            AiAnswerSpec spec = ANSWER_MAPPER.readValue(reply, AiAnswerSpec.class);
+            if (spec == null || spec.answer() == null) {
+                log.warn("Answer JSON has no answer; showing the reply as text");
+                return new AiAnswer(reply, null);
+            }
+            return new AiAnswer(spec.answer(), spec.file());
+        } catch (Exception e) {
+            log.warn("Answer is not valid JSON ({}); showing it as text without a file", e.getMessage());
+            return new AiAnswer(reply, null);
+        }
     }
 
     /** A file the user attached to the question; text is null when it couldn't be read. */

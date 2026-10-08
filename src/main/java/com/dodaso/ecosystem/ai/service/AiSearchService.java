@@ -4,6 +4,7 @@ import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
 import com.dodaso.ecosystem.ai.dto.AiAlertDTO;
 import com.dodaso.ecosystem.ai.dto.AiChatFileDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
+import com.dodaso.ecosystem.ai.dto.AiGeneratedFileDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchSyncDTO;
 import com.dodaso.ecosystem.ai.entity.EcwsEmbedding;
@@ -68,6 +69,9 @@ public class AiSearchService {
 
     @Autowired
     FileTextExtractorService fileTextExtractorService;
+
+    @Autowired
+    AiDocumentService aiDocumentService;
 
     @Autowired
     VectorStore vectorStore;
@@ -144,16 +148,44 @@ private final ChatClient chatClient = null;
         // List<AiSearchResultDTO> sources = findResults(request.getProjectId(), prompt);
         String searchText = request.getSearchText() != null && !request.getSearchText().trim().isEmpty()
             ? request.getSearchText().trim() : prompt;
-        List<AiSearchResultDTO> sources = findResults(request.getProjectId(), searchText);
-        List<AiAlertDTO> alerts = findAlerts(request.getLoginId(), sources);
+        // A question with attached files is about those files: no task search and no alerts,
+        // unless the user asked to search tasks too
+        // boolean fileQuestion = request.getFiles() != null && !request.getFiles().isEmpty();
+        boolean fileQuestion = request.getFiles() != null && !request.getFiles().isEmpty()
+            && !Boolean.TRUE.equals(request.getSearchTasksWithFiles());
+        // List<AiSearchResultDTO> sources = findResults(request.getProjectId(), searchText);
+        // List<AiAlertDTO> alerts = findAlerts(request.getLoginId(), sources);
+        List<AiSearchResultDTO> sources = fileQuestion ? new ArrayList<>()
+            : findResults(request.getProjectId(), searchText);
+        List<AiAlertDTO> alerts = fileQuestion ? new ArrayList<>()
+            : findAlerts(request.getLoginId(), sources);
         // String answer = aiRagService.answer(prompt, sources);
         // String answer = aiRagService.answer(prompt, sources, request.getHistory());
         // String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts);
         // String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts,
         //     request.getLoginId());
         List<AiRagService.AttachedFile> files = extractFiles(request.getFiles());
-        String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts,
-            request.getLoginId(), files);
+        // String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts,
+        //     request.getLoginId(), files);
+        AiRagService.AiAnswer reply = aiRagService.answerWithFile(prompt, sources, request.getHistory(),
+            alerts, request.getLoginId(), files);
+        String answer = reply.text();
+        List<AiGeneratedFileDTO> generatedFiles = new ArrayList<>();
+        if (reply.file() != null && request.getLoginId() != null && !request.getLoginId().isBlank()) {
+            try {
+                AiDocumentService.Created created = aiDocumentService.create(reply.file(),
+                    request.getLoginId(), sources);
+                if (created.file() != null) {
+                    generatedFiles.add(created.file());
+                }
+                if (created.note() != null) {
+                    answer = answer + "\n\n" + created.note();
+                }
+            } catch (Exception e) {
+                log.error("Could not make the file the answer asked for", e);
+                answer = answer + "\n\n" + FILE_FAILED;
+            }
+        }
         // log.info("Generated answer from {} source(s) in {} ms for project {}",
         //     sources.size(), System.currentTimeMillis() - start, request.getProjectId());
         // log.info("Generated answer from {} source(s) and {} alert(s) in {} ms for project {}",
@@ -168,8 +200,11 @@ private final ChatClient chatClient = null;
         response.setProjectId(request.getProjectId());
         response.setSources(sources);
         response.setAlerts(alerts);
+        response.setGeneratedFiles(generatedFiles);
         return response;
     }
+
+    static final String FILE_FAILED = "The file couldn't be made; please ask again.";
 
     /**
      * The text of the files attached to a question. A file that can't be read (an image, an

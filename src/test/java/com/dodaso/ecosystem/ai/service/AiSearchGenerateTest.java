@@ -48,6 +48,7 @@ class AiSearchGenerateTest {
     private AiRagService ragService;
     private EarsAlertService earsAlertService;
     private AiSearchService searchService;
+    private AiDocumentService documentService;
 
     @BeforeEach
     void setUp() {
@@ -57,6 +58,9 @@ class AiSearchGenerateTest {
         ragService = mock(AiRagService.class);
         earsAlertService = mock(EarsAlertService.class);
         when(ollamaService.getOllamaEmbedding(anyString())).thenReturn(new float[] {0.1f, 0.2f});
+        when(ragService.answerWithFile(any(), any(), any(), any(), any(), any()))
+            .thenReturn(new AiRagService.AiAnswer("answer", null));
+        documentService = mock(AiDocumentService.class);
 
         searchService = new AiSearchService(mock(ChatModel.class));
         ReflectionTestUtils.setField(searchService, "embeddingRepository", embeddingRepository);
@@ -65,6 +69,7 @@ class AiSearchGenerateTest {
         ReflectionTestUtils.setField(searchService, "aiRagService", ragService);
         ReflectionTestUtils.setField(searchService, "earsAlertService", earsAlertService);
         ReflectionTestUtils.setField(searchService, "fileTextExtractorService", new FileTextExtractorService());
+        ReflectionTestUtils.setField(searchService, "aiDocumentService", documentService);
     }
 
     private static EcwsEmbedding emb(String type, Long sourceId, Long taskId, String text) {
@@ -91,7 +96,9 @@ class AiSearchGenerateTest {
         // when(ragService.answer(eq("login issue"), any(), any())).thenReturn("Safari login fails [2].");
         // when(ragService.answer(eq("login issue"), any(), any(), any())).thenReturn("Safari login fails [2].");
         // when(ragService.answer(eq("login issue"), any(), any(), any(), any())).thenReturn("Safari login fails [2].");
-        when(ragService.answer(eq("login issue"), any(), any(), any(), any(), any())).thenReturn("Safari login fails [2].");
+        // when(ragService.answer(eq("login issue"), any(), any(), any(), any(), any())).thenReturn("Safari login fails [2].");
+        when(ragService.answerWithFile(eq("login issue"), any(), any(), any(), any(), any()))
+            .thenReturn(new AiRagService.AiAnswer("Safari login fails [2].", null));
 
         AiGenerateDTO response = searchService.generate(request("  login issue ", 1L));
 
@@ -103,7 +110,9 @@ class AiSearchGenerateTest {
         // verify(ragService).answer("login issue", response.getSources(), null);
         // verify(ragService).answer("login issue", response.getSources(), null, List.of());
         // verify(ragService).answer("login issue", response.getSources(), null, List.of(), null);
-        verify(ragService).answer("login issue", response.getSources(), null, List.of(), null, List.of());
+        // verify(ragService).answer("login issue", response.getSources(), null, List.of(), null, List.of());
+        verify(ragService).answerWithFile("login issue", response.getSources(), null, List.of(), null, List.of());
+        assertTrue(response.getGeneratedFiles().isEmpty());
         // generate is not a search; it doesn't add a history row
         verifyNoInteractions(searchHistoryRepository);
     }
@@ -123,7 +132,8 @@ class AiSearchGenerateTest {
         // verify(ragService).answer(eq("what about Safari?"), any(), eq(history));
         // verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any());
         // verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any(), any());
-        verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any(), any(), any());
+        // verify(ragService).answer(eq("what about Safari?"), any(), eq(history), any(), any(), any());
+        verify(ragService).answerWithFile(eq("what about Safari?"), any(), eq(history), any(), any(), any());
     }
 
     @Test
@@ -264,7 +274,9 @@ class AiSearchGenerateTest {
         // verify(ragService).answer(eq("what is overdue?"), any(), any(), eq(List.of(mine, onTask)));
         // verify(ragService).answer(eq("what is overdue?"), any(), any(),
         //     eq(List.of(pastDue, onTask, mine)), eq("kim"));
-        verify(ragService).answer(eq("what is overdue?"), any(), any(),
+        // verify(ragService).answer(eq("what is overdue?"), any(), any(),
+        //     eq(List.of(pastDue, onTask, mine)), eq("kim"), any());
+        verify(ragService).answerWithFile(eq("what is overdue?"), any(), any(),
             eq(List.of(pastDue, onTask, mine)), eq("kim"), any());
     }
 
@@ -353,9 +365,42 @@ class AiSearchGenerateTest {
 
         searchService.generate(request);
 
-        verify(ragService).answer(eq("summarize this"), any(), any(), any(), any(), eq(List.of(
+        // verify(ragService).answer(eq("summarize this"), any(), any(), any(), any(), eq(List.of(
+        verify(ragService).answerWithFile(eq("summarize this"), any(), any(), any(), any(), eq(List.of(
             new AiRagService.AttachedFile("notes.txt", "Release is on Friday"),
             new AiRagService.AttachedFile("photo.png", null))));
+    }
+
+    @Test
+    void questionWithAttachedFilesSkipsTheSearchAndAlerts() {
+        AiGenerateDTO request = request("summarize this", 1L);
+        request.setLoginId("kim");
+        request.setFiles(List.of(new AiChatFileDTO("notes.txt", "Release is on Friday".getBytes())));
+
+        AiGenerateDTO response = searchService.generate(request);
+
+        assertTrue(response.getSources().isEmpty());
+        assertTrue(response.getAlerts().isEmpty());
+        verifyNoInteractions(ollamaService, embeddingRepository, earsAlertService);
+        verify(ragService).answerWithFile(eq("summarize this"), eq(List.of()), any(), eq(List.of()), eq("kim"),
+            eq(List.of(new AiRagService.AttachedFile("notes.txt", "Release is on Friday"))));
+    }
+
+    @Test
+    void questionWithAttachedFilesSearchesTasksTooWhenAsked() {
+        when(embeddingRepository.findSimilarAll(eq(1L), anyString(), anyInt()))
+            .thenReturn(List.of(emb(TASK, 12L, 12L, "Release task")));
+        AiGenerateDTO request = request("compare with our tasks", 1L);
+        request.setLoginId("kim");
+        request.setFiles(List.of(new AiChatFileDTO("notes.txt", "Release is on Friday".getBytes())));
+        request.setSearchTasksWithFiles(true);
+
+        AiGenerateDTO response = searchService.generate(request);
+
+        assertEquals(1, response.getSources().size());
+        verify(earsAlertService).findUserAlerts("kim");
+        verify(ragService).answerWithFile(eq("compare with our tasks"), eq(response.getSources()), any(),
+            any(), eq("kim"), eq(List.of(new AiRagService.AttachedFile("notes.txt", "Release is on Friday"))));
     }
 
     @Test

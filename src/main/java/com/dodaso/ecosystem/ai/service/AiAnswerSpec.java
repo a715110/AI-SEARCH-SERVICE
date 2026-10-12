@@ -5,13 +5,13 @@ import java.util.List;
 
 /**
  * An answer as the model returns it when it may make a file: the chat reply, and a document spec
- * when the user asked for a Word or Excel file (null otherwise). Our code builds the file from the
+ * when the user asked for a Word, Excel, PDF or CSV file (null otherwise). Our code builds the file from the
  * spec (AiDocumentService); the model never returns file bytes.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record AiAnswerSpec(String answer, FileSpec file) {
 
-    /** The file to make: DOCX or XLSX, its name without extension, a title and the content. */
+    /** The file to make: DOCX, XLSX, PDF or CSV, its name without extension, a title and the content. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record FileSpec(String format, String fileName, String title, List<BlockSpec> blocks) {}
 
@@ -42,7 +42,7 @@ public record AiAnswerSpec(String answer, FileSpec file) {
             "file": {
               "type": "object",
               "properties": {
-                "format": {"type": "string", "enum": ["DOCX", "XLSX"]},
+                "format": {"type": "string", "enum": ["DOCX", "XLSX", "PDF", "CSV"]},
                 "fileName": {"type": "string"},
                 "title": {"type": ["string", "null"]},
                 "blocks": {"type": "array", "items": {"$ref": "#/$defs/block"}}

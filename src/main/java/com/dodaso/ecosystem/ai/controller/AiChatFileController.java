@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Downloads of the files the AI Search chat made (Word, Excel). */
+/** Downloads of the files the AI Search chat made (Word, Excel, PDF, CSV). */
 @RestController
 @RequestMapping("/aiChatFileController")
 @Slf4j

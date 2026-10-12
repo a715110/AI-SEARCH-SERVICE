@@ -413,7 +413,7 @@ class AiSearchGenerateTest {
 
         assertTrue(prompt.contains("Attached files:\n--- notes.txt ---\nRelease is on Friday\n\n"
             + "--- photo.png ---\n(this file couldn't be read)\n\n"));
-        assertTrue(prompt.contains("y".repeat(AiRagService.MAX_FILE_CHARS) + "..."));
+        assertTrue(prompt.contains("y".repeat(AiRagService.MAX_FILE_CHARS) + "...\n" + AiRagService.FILE_CUT_NOTE));
         assertFalse(prompt.contains("y".repeat(AiRagService.MAX_FILE_CHARS + 1)));
         assertTrue(prompt.indexOf("Alerts and reminders") < prompt.indexOf("Attached files"));
         assertTrue(prompt.endsWith("Question: q"));

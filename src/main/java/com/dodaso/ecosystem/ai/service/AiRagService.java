@@ -230,7 +230,7 @@ public class AiRagService {
 
     /**
      * Same as answer(question, sources, history, alerts, loginId, files), but the model may also
-     * return a Word or Excel document spec when the user asks for a file. The model replies with
+     * return a Word, Excel, PDF or CSV document spec when the user asks for a file. The model replies with
      * AiAnswerSpec JSON; a reply that isn't valid JSON is used as the text, with no file. Without
      * a loginId no file can be owned, so the plain text answer is used.
      */
@@ -260,17 +260,30 @@ public class AiRagService {
         return parseAnswer(reply);
     }
 
+    // private static final String FILE_OUTPUT_INSTRUCTIONS = """
+    //     Reply as JSON with "answer" and "file". "answer" is your reply in the chat. Set "file" only \
+    //     when the user asks for a file or document, such as a Word document or an Excel sheet (for \
+    //     example "as a Word file", "make it in Word", "organize it in Excel"); otherwise "file" is null. \
+    //     Formats: DOCX for documents, summaries and reports; XLSX for lists and tables. Put the \
+    //     content in the file's blocks and keep "answer" to 1-3 sentences saying what the file \
+    //     contains. An XLSX file needs at least one table block; each table \
+    //     becomes a sheet. Use only what is in the sources, alerts and attached files, and never \
+    //     invent rows that aren't there. Keep a table to at most 500 rows; if there is more, say in \
+    //     the answer that the file has the first 500. "fileName" is a short name without extension. \
+    //     You can't make other formats (PDF, PowerPoint, images); say so and set "file" to null.""";
     private static final String FILE_OUTPUT_INSTRUCTIONS = """
         Reply as JSON with "answer" and "file". "answer" is your reply in the chat. Set "file" only \
-        when the user asks for a file or document, such as a Word document or an Excel sheet (for \
-        example "as a Word file", "워드로 만들어줘", "엑셀로 정리해줘"); otherwise "file" is null. \
-        Formats: DOCX for documents, summaries and reports; XLSX for lists and tables. Put the \
-        content in the file's blocks and keep "answer" to 1-3 sentences saying what the file \
-        contains. An XLSX file needs at least one table block; each table \
-        becomes a sheet. Use only what is in the sources, alerts and attached files, and never \
-        invent rows that aren't there. Keep a table to at most 500 rows; if there is more, say in \
-        the answer that the file has the first 500. "fileName" is a short name without extension. \
-        You can't make other formats (PDF, PowerPoint, images); say so and set "file" to null.""";
+        when the user asks for a file or document, such as a Word document, an Excel sheet, a PDF \
+        or a CSV, in any language (for example "as a Word file", "organize it in Excel", "make a \
+        PDF", "export as CSV"); otherwise "file" is null. Formats: DOCX for documents, summaries and \
+        reports; XLSX for lists and tables; PDF when the user asks for a PDF; CSV when the user asks \
+        for a CSV. Put the content in the file's blocks and keep "answer" to 1-3 sentences saying \
+        what the file contains. An XLSX file needs at least one table block; each table becomes a \
+        sheet. A CSV file is exactly one table block. Use only what is in the sources, alerts and \
+        attached files, and never invent rows that aren't there. Keep a table to at most 500 rows; \
+        if there is more, say in the answer that the file has the first 500. "fileName" is a short \
+        name without extension. You can't make other formats (PowerPoint, images); say so and set \
+        "file" to null.""";
 
     // A file's content is in the reply, so it can be much longer than a plain answer
     static final int FILE_ANSWER_MAX_TOKENS = 16000;
@@ -313,13 +326,23 @@ public class AiRagService {
     /** A file the user attached to the question; text is null when it couldn't be read. */
     public record AttachedFile(String fileName, String text) {}
 
+    // private static final String FILE_INSTRUCTIONS = """
+    //     An "Attached files" list may follow; these are files the user attached to this question. \
+    //     Use them like sources, but name the file (for example "report.pdf") instead of a [n] \
+    //     citation. If a file couldn't be read, say so.""";
     private static final String FILE_INSTRUCTIONS = """
         An "Attached files" list may follow; these are files the user attached to this question. \
         Use them like sources, but name the file (for example "report.pdf") instead of a [n] \
-        citation. If a file couldn't be read, say so.""";
+        citation. If a file couldn't be read, say so. If a file ends with "(cut: ...)", only its \
+        beginning was given to you: say in your answer that it covers only the first part of that \
+        file, and don't guess what the rest contains.""";
 
     // Text kept per attached file, so a few large files still fit the prompt
     static final int MAX_FILE_CHARS = 20000;
+
+    // After an attached file's text that was cut at MAX_FILE_CHARS, so the answer can say so
+    static final String FILE_CUT_NOTE = "(cut: only the first " + MAX_FILE_CHARS
+        + " characters of this file are shown)";
 
     /**
      * Earlier turns as messages, oldest first. Their [n] citations are removed: they numbered that
@@ -411,7 +434,8 @@ public class AiRagService {
                 }
                 text = text.trim();
                 if (text.length() > MAX_FILE_CHARS) {
-                    text = text.substring(0, MAX_FILE_CHARS) + "...";
+                    // text = text.substring(0, MAX_FILE_CHARS) + "...";
+                    text = text.substring(0, MAX_FILE_CHARS) + "...\n" + FILE_CUT_NOTE;
                 }
                 prompt.append(text).append("\n\n");
             }

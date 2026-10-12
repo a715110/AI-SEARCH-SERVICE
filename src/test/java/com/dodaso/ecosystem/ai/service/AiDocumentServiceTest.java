@@ -22,13 +22,19 @@ import com.dodaso.ecosystem.ai.repository.AiChatFileRepository;
 import com.dodaso.ecosystem.ai.service.AiAnswerSpec.BlockSpec;
 import com.dodaso.ecosystem.ai.service.AiAnswerSpec.FileSpec;
 import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -45,6 +51,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 class AiDocumentServiceTest {
 
     private static final String TASK = EmbeddingSourceTypeEnum.COLLABORATION_TASK.getSourceType();
+    // The Korean for "meeting summary", built from its code points so the source stays English;
+    // the tests use it to check Hangul survives in every format
+    private static final String KOREAN = new String(new int[] {0xD68C, 0xC758, 0xB85D, 0x20, 0xC694, 0xC57D}, 0, 6);
 
     private AiChatFileRepository repository;
     private AiDocumentService service;
@@ -78,9 +87,9 @@ class AiDocumentServiceTest {
 
     @Test
     void docxHasTitleHeadingsBulletsAndTable() throws Exception {
-        FileSpec spec = new FileSpec("DOCX", "회의록 요약", "10월 회의록 요약", List.of(
-            heading(1, "결정 사항"),
-            paragraph("로그인 오류를 먼저 고칩니다."),
+        FileSpec spec = new FileSpec("DOCX", "Meeting summary", "October " + KOREAN, List.of(
+            heading(1, "Decisions"),
+            paragraph("Fix the login bug first."),
             bullets("Safari", "Chrome"),
             table("Action items", List.of("Task", "Owner"), List.of(List.of("Login bug", "kim")))));
 
@@ -88,12 +97,12 @@ class AiDocumentServiceTest {
 
         try (XWPFDocument doc = new XWPFDocument(new ByteArrayInputStream(bytes))) {
             List<XWPFParagraph> paragraphs = doc.getParagraphs();
-            assertEquals("10월 회의록 요약", paragraphs.get(0).getText());
+            assertEquals("October " + KOREAN, paragraphs.get(0).getText());
             assertEquals("Title", paragraphs.get(0).getStyle());
-            assertEquals("결정 사항", paragraphs.get(1).getText());
+            assertEquals("Decisions", paragraphs.get(1).getText());
             assertEquals("Heading1", paragraphs.get(1).getStyle());
             assertTrue(doc.getStyles().styleExist("Heading1"));
-            assertEquals("로그인 오류를 먼저 고칩니다.", paragraphs.get(2).getText());
+            assertEquals("Fix the login bug first.", paragraphs.get(2).getText());
             assertEquals("•\tSafari", paragraphs.get(3).getText());
             XWPFTable table = doc.getTables().get(0);
             assertEquals(2, table.getNumberOfRows());
@@ -109,7 +118,7 @@ class AiDocumentServiceTest {
             paragraph("Tasks past due"),
             table("Overdue tasks", List.of("Task", "Hours", "Due", "Note"), List.of(
                 List.of("Login bug", "3.5", "2026-10-10", "=SUM(A1)"),
-                List.of("한글 작업", "-2", "2026-10-11", "+1"))),
+                List.of(KOREAN, "-2", "2026-10-11", "+1"))),
             table("Overdue tasks", List.of("Owner"), List.of(List.of("kim")))));
 
         byte[] bytes = AiDocumentService.buildXlsx(spec);
@@ -123,7 +132,7 @@ class AiDocumentServiceTest {
             assertEquals("Task", sheet.getRow(0).getCell(0).getStringCellValue());
             assertTrue(workbook.getFontAt(sheet.getRow(0).getCell(0).getCellStyle().getFontIndex()).getBold());
             assertNotNull(sheet.getPaneInformation());
-            assertEquals("한글 작업", sheet.getRow(2).getCell(0).getStringCellValue());
+            assertEquals(KOREAN, sheet.getRow(2).getCell(0).getStringCellValue());
             assertEquals(CellType.NUMERIC, sheet.getRow(1).getCell(1).getCellType());
             assertEquals(-2.0, sheet.getRow(2).getCell(1).getNumericCellValue());
             assertTrue(DateUtil.isCellDateFormatted(sheet.getRow(1).getCell(2)));
@@ -135,6 +144,151 @@ class AiDocumentServiceTest {
             assertEquals("Overdue", notes.getRow(0).getCell(0).getStringCellValue());
             assertEquals("Tasks past due", notes.getRow(1).getCell(0).getStringCellValue());
         }
+    }
+
+    @Test
+    void pdfHasKoreanTextHeadingsBulletsAndTable() throws Exception {
+        FileSpec spec = new FileSpec("PDF", "Meeting summary", "October " + KOREAN, List.of(
+            heading(1, "Decisions"),
+            paragraph("Fix the login bug first.\nSecond line " + KOREAN),
+            bullets("Safari", "Chrome"),
+            table("Action items", List.of("Task", "Owner"), List.of(List.of("Login bug", "kim " + KOREAN)))));
+
+        byte[] bytes = AiDocumentService.buildPdf(spec);
+
+        try (PDDocument doc = Loader.loadPDF(bytes)) {
+            assertEquals(1, doc.getNumberOfPages());
+            assertEquals("October " + KOREAN, doc.getDocumentInformation().getTitle());
+            String text = new PDFTextStripper().getText(doc);
+            assertTrue(text.contains("October " + KOREAN), text);
+            assertTrue(text.contains("Decisions"), text);
+            assertTrue(text.contains("Fix the login bug first."), text);
+            assertTrue(text.contains("Second line " + KOREAN), text);
+            assertTrue(text.contains("Safari"), text);
+            assertTrue(text.contains("Action items"), text);
+            assertTrue(text.contains("kim " + KOREAN), text);
+            assertTrue(text.contains("1 / 1"), text);
+            // portrait A4
+            PDPage page = doc.getPage(0);
+            assertTrue(page.getMediaBox().getHeight() > page.getMediaBox().getWidth());
+        }
+    }
+
+    @Test
+    void pdfWrapsLongTextAndRepeatsTheTableHeaderOnEveryPage() throws Exception {
+        List<List<String>> rows = new ArrayList<>();
+        for (int i = 0; i < 200; i++) {
+            rows.add(List.of(KOREAN + " " + i, "kim"));
+        }
+        String longText = (KOREAN + " long sentence ").repeat(300) + "averyveryverylongwordwithoutanyspaces".repeat(10);
+        FileSpec spec = new FileSpec("PDF", "x", null, List.of(
+            paragraph(longText),
+            table("Tasks", List.of("Task", "Owner"), rows)));
+
+        try (PDDocument doc = Loader.loadPDF(AiDocumentService.buildPdf(spec))) {
+            int pages = doc.getNumberOfPages();
+            assertTrue(pages >= 3, "pages: " + pages);
+            PDFTextStripper stripper = new PDFTextStripper();
+            // From the page the table starts on, every page has its header
+            int tablePages = 0;
+            for (int page = 1; page <= pages; page++) {
+                stripper.setStartPage(page);
+                stripper.setEndPage(page);
+                String text = stripper.getText(doc);
+                assertTrue(text.contains(page + " / " + pages), text);
+                if (tablePages > 0 || text.contains("Owner")) {
+                    assertTrue(text.contains("Owner"), "header on page " + page);
+                    tablePages++;
+                }
+            }
+            assertTrue(tablePages >= 2, "table pages: " + tablePages);
+            stripper.setStartPage(1);
+            stripper.setEndPage(pages);
+            String all = stripper.getText(doc);
+            assertTrue(all.contains(KOREAN + " 0") && all.contains(KOREAN + " 199"), all);
+        }
+    }
+
+    @Test
+    void pdfDrawsCharactersTheFontLacksAsQuestionMarksAndWideTablesLandscape() throws Exception {
+        List<String> columns = new ArrayList<>();
+        for (int i = 0; i < AiPdfBuilder.LANDSCAPE_COLUMNS + 1; i++) {
+            columns.add("c" + i);
+        }
+        FileSpec spec = new FileSpec("PDF", "x", null, List.of(
+            paragraph("Done 😀\ttab\u0001"),
+            table(null, columns, List.of(List.of("a")))));
+
+        try (PDDocument doc = Loader.loadPDF(AiDocumentService.buildPdf(spec))) {
+            String text = new PDFTextStripper().getText(doc);
+            assertTrue(text.contains("Done ?"), text);
+            assertTrue(text.contains("tab"), text);
+            PDPage page = doc.getPage(0);
+            assertTrue(page.getMediaBox().getWidth() > page.getMediaBox().getHeight());
+        }
+    }
+
+    @Test
+    void createSavesAPdf() throws Exception {
+        AiDocumentService.Created created = service.create(
+            new FileSpec("pdf", KOREAN + ".pdf", "Report", List.of(paragraph("Content"))), "kim", List.of());
+
+        ArgumentCaptor<AiChatFile> saved = ArgumentCaptor.forClass(AiChatFile.class);
+        verify(repository).save(saved.capture());
+        assertEquals(KOREAN + ".pdf", saved.getValue().getFileName());
+        assertEquals(AiDocumentService.PDF_TYPE, saved.getValue().getContentType());
+        assertEquals("%PDF", new String(saved.getValue().getContent(), 0, 4));
+        assertEquals(KOREAN + ".pdf", created.file().getFileName());
+    }
+
+    @Test
+    void csvHasTheFirstTableWithABomQuotingAndNoFormulas() throws Exception {
+        FileSpec spec = new FileSpec("CSV", "tasks", "Overdue", List.of(
+            paragraph("ignored"),
+            table("Overdue", List.of("Task", "Hours", "Note"), List.of(
+                List.of(KOREAN, "-2", "=SUM(A1)"),
+                List.of("a, b", "3.5", "say \"hi\"\nnext line"))),
+            table("Second", List.of("X"), List.of(List.of("never")))));
+
+        byte[] bytes = AiDocumentService.buildCsv(spec);
+
+        assertArrayEquals(new byte[] {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF}, Arrays.copyOf(bytes, 3));
+        String csv = new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8);
+        assertEquals("Task,Hours,Note\r\n"
+            + KOREAN + ",-2,'=SUM(A1)\r\n"
+            + "\"a, b\",3.5,\"say \"\"hi\"\"\nnext line\"\r\n", csv);
+    }
+
+    @Test
+    void csvFieldsStartingWithFormulaCharactersBecomeText() {
+        assertEquals("'+1 more", AiDocumentService.csvField("+1 more"));
+        assertEquals("'@cmd", AiDocumentService.csvField("@cmd"));
+        assertEquals("'-x", AiDocumentService.csvField("-x"));
+        assertEquals("-12.5", AiDocumentService.csvField("-12.5"));
+        assertEquals("", AiDocumentService.csvField(null));
+    }
+
+    @Test
+    void createSavesACsvAndSaysOnlyTheFirstTableIsInIt() throws Exception {
+        AiDocumentService.Created created = service.create(new FileSpec("csv", "List.CSV", null, List.of(
+            table("A", List.of("x"), List.of(List.of("1"))),
+            table("B", List.of("y"), List.of(List.of("2"))))), "kim", List.of());
+
+        ArgumentCaptor<AiChatFile> saved = ArgumentCaptor.forClass(AiChatFile.class);
+        verify(repository).save(saved.capture());
+        assertEquals("List.csv", saved.getValue().getFileName());
+        assertEquals(AiDocumentService.CSV_TYPE, saved.getValue().getContentType());
+        assertEquals(AiDocumentService.CSV_FIRST_TABLE_NOTE, created.note());
+    }
+
+    @Test
+    void csvWithoutATableMakesNoFile() throws Exception {
+        AiDocumentService.Created created = service.create(
+            new FileSpec("CSV", "x", null, List.of(paragraph("no table"))), "kim", List.of());
+
+        assertNull(created.file());
+        assertEquals(AiDocumentService.NO_TABLE_CSV_NOTE, created.note());
+        verifyNoInteractions(repository);
     }
 
     @Test
@@ -161,7 +315,7 @@ class AiDocumentServiceTest {
     @Test
     void unsupportedFormatMakesNoFile() throws Exception {
         AiDocumentService.Created created = service.create(
-            new FileSpec("PDF", "x", null, List.of(paragraph("text"))), "kim", List.of());
+            new FileSpec("PPTX", "x", null, List.of(paragraph("text"))), "kim", List.of());
 
         assertNull(created.file());
         assertEquals(AiDocumentService.UNSUPPORTED_NOTE, created.note());
@@ -241,11 +395,12 @@ class AiDocumentServiceTest {
     void fileNamesAreCleaned() {
         LocalDateTime now = LocalDateTime.of(2026, 10, 7, 9, 5);
 
-        assertEquals("회의록 요약.docx", AiDocumentService.fileName("회의록 요약", "DOCX", now));
+        assertEquals(KOREAN + ".docx", AiDocumentService.fileName(KOREAN, "DOCX", now));
         assertEquals("ab.xlsx", AiDocumentService.fileName("a/b\u0001.xlsx", "XLSX", now));
         assertEquals("report.docx", AiDocumentService.fileName("report. ", "DOCX", now));
         assertEquals("AI-answer-20261007-0905.docx", AiDocumentService.fileName(" <> ", "DOCX", now));
         assertEquals("AI-answer-20261007-0905.xlsx", AiDocumentService.fileName(null, "XLSX", now));
+        assertEquals("report.pdf", AiDocumentService.fileName("report.PDF", "PDF", now));
         assertEquals("x".repeat(AiDocumentService.MAX_FILE_NAME_CHARS) + ".docx",
             AiDocumentService.fileName("x".repeat(150), "DOCX", now));
     }

@@ -26,7 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * File-embedding delete cleanup (plan PLAN-attachment-to-common-service 짠7.3):
+ * File-embedding delete cleanup (plan PLAN-attachment-to-common-service section 7.3):
  * deleteFileEmbeddings endpoint logic and the refreshFileSyncs inactive-file pass.
  */
 class AiFileSyncServiceDeleteTest {

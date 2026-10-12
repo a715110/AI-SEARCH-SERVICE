@@ -44,6 +44,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 class AiAnswerWithFileTest {
 
     private static final String TASK = EmbeddingSourceTypeEnum.COLLABORATION_TASK.getSourceType();
+    // The Korean word for "summary", built from its code points so the source stays English
+    private static final String KOREAN_SUMMARY = new String(new int[] {0xC694, 0xC57D}, 0, 2);
     private static final List<AiSearchResultDTO> SOURCES = List.of(AiSearchResultDTO.builder()
         .sourceType(TASK).sourceId(12L).taskId(12L).chunkText("Fix the login page").build());
     private static final FileSpec SPEC = new FileSpec("DOCX", "Summary", null,
@@ -77,15 +79,15 @@ class AiAnswerWithFileTest {
     @Test
     void askedForAFileReturnsItsSpec() {
         reply("""
-            {"answer": "Word 문서를 만들었습니다.", "file": {"format": "DOCX", "fileName": "요약", "title": null,
-             "blocks": [{"type": "heading", "level": 1, "text": "결정", "items": null, "name": null,
+            {"answer": "I made a Word document.", "file": {"format": "DOCX", "fileName": "Summary", "title": null,
+             "blocks": [{"type": "heading", "level": 1, "text": "Decisions", "items": null, "name": null,
                          "columns": null, "rows": null}]}}""");
 
-        AiRagService.AiAnswer answer = rag.answerWithFile("워드로 요약해줘", SOURCES, null, List.of(), "kim", null);
+        AiRagService.AiAnswer answer = rag.answerWithFile("summarize it in Word", SOURCES, null, List.of(), "kim", null);
 
-        assertEquals("Word 문서를 만들었습니다.", answer.text());
+        assertEquals("I made a Word document.", answer.text());
         assertEquals("DOCX", answer.file().format());
-        assertEquals("결정", answer.file().blocks().get(0).text());
+        assertEquals("Decisions", answer.file().blocks().get(0).text());
     }
 
     @Test
@@ -123,14 +125,15 @@ class AiAnswerWithFileTest {
     void answerLanguageFollowsTheQuestionNotTheSources() {
         assertTrue(AiRagService.languageInstructions("summarize the login issue").startsWith(
             "Write your answer in English"));
-        assertTrue(AiRagService.languageInstructions("로그인 문제를 요약해줘").startsWith(
+        assertTrue(AiRagService.languageInstructions(KOREAN_SUMMARY).startsWith(
             "Write your answer in Korean"));
-        assertTrue(AiRagService.languageInstructions("Task #12 요약").startsWith("Write your answer in Korean"));
+        assertTrue(AiRagService.languageInstructions("Task #12 " + KOREAN_SUMMARY).startsWith(
+            "Write your answer in Korean"));
         assertTrue(AiRagService.languageInstructions(null).startsWith("Write your answer in English"));
 
         reply("{\"answer\": \"ok\", \"file\": null}");
         ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
-        rag.answerWithFile("엑셀로 정리해줘", SOURCES, null, List.of(), "kim", null);
+        rag.answerWithFile(KOREAN_SUMMARY + " Excel", SOURCES, null, List.of(), "kim", null);
         verify(openAiClient.prompt(), atLeastOnce()).system(system.capture());
         assertTrue(system.getValue().contains("Write your answer in Korean"));
     }

@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -53,7 +54,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Builds the Word and Excel files the AI Search chat makes from an answer's document spec, saves
+ * Builds the Word, Excel, PDF and CSV files the AI Search chat makes from an answer's document spec, saves
  * them for their owner, and serves their downloads. Files are built only from the spec: no macros,
  * formulas, links or images.
  */
@@ -63,8 +64,12 @@ public class AiDocumentService {
 
     static final String DOCX = "DOCX";
     static final String XLSX = "XLSX";
+    static final String PDF = "PDF";
+    static final String CSV = "CSV";
     static final String DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     static final String XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    static final String PDF_TYPE = "application/pdf";
+    static final String CSV_TYPE = "text/csv";
 
     // Limits on a spec; content over them is cut and the answer says so
     static final int MAX_BLOCKS = 300;
@@ -85,7 +90,10 @@ public class AiDocumentService {
     static final String CUT_NOTE = "The file was shortened to fit its limits (at most " + MAX_BLOCKS
         + " parts, " + MAX_ROWS + " rows and " + MAX_COLUMNS + " columns per table).";
     static final String NO_TABLE_NOTE = "No Excel file was made: the answer had no table to put in it.";
-    static final String UNSUPPORTED_NOTE = "No file was made: only Word and Excel files can be made.";
+    static final String NO_TABLE_CSV_NOTE = "No CSV file was made: the answer had no table to put in it.";
+    static final String CSV_FIRST_TABLE_NOTE = "A CSV file holds one table, so it has only the first one.";
+    // static final String UNSUPPORTED_NOTE = "No file was made: only Word and Excel files can be made.";
+    static final String UNSUPPORTED_NOTE = "No file was made: only Word, Excel, PDF and CSV files can be made.";
     static final String TOO_LARGE_NOTE = "No file was made: it would be larger than "
         + (MAX_FILE_BYTES / (1024 * 1024)) + " MB.";
 
@@ -109,14 +117,15 @@ public class AiDocumentService {
     /**
      * Builds the file a spec describes, saves it for loginId for EXPIRY, and returns it without
      * its bytes. [n] citations become "(Task #12)" from sources. No file is made for an unknown
-     * format, an Excel spec without a table, or a file over MAX_FILE_BYTES; the note says why.
+     * format, an Excel or CSV spec without a table, or a file over MAX_FILE_BYTES; the note says why.
      */
     public Created create(FileSpec spec, String loginId, List<AiSearchResultDTO> sources) throws IOException {
         if (loginId == null || loginId.isBlank()) {
             throw new IllegalArgumentException("A generated file needs an owner");
         }
         String format = spec.format() != null ? spec.format().trim().toUpperCase(Locale.ROOT) : "";
-        if (!DOCX.equals(format) && !XLSX.equals(format)) {
+        // if (!DOCX.equals(format) && !XLSX.equals(format)) {
+        if (!DOCX.equals(format) && !XLSX.equals(format) && !PDF.equals(format) && !CSV.equals(format)) {
             return new Created(null, UNSUPPORTED_NOTE);
         }
         List<String> notes = new ArrayList<>();
@@ -124,7 +133,20 @@ public class AiDocumentService {
         if (XLSX.equals(format) && clean.blocks().stream().noneMatch(AiDocumentService::isTable)) {
             return new Created(null, NO_TABLE_NOTE);
         }
-        byte[] bytes = DOCX.equals(format) ? buildDocx(clean) : buildXlsx(clean);
+        long tables = clean.blocks().stream().filter(AiDocumentService::isTable).count();
+        if (CSV.equals(format) && tables == 0) {
+            return new Created(null, NO_TABLE_CSV_NOTE);
+        }
+        if (CSV.equals(format) && tables > 1) {
+            notes.add(CSV_FIRST_TABLE_NOTE);
+        }
+        // byte[] bytes = DOCX.equals(format) ? buildDocx(clean) : buildXlsx(clean);
+        byte[] bytes = switch (format) {
+            case DOCX -> buildDocx(clean);
+            case XLSX -> buildXlsx(clean);
+            case PDF -> buildPdf(clean);
+            default -> buildCsv(clean);
+        };
         if (bytes.length > MAX_FILE_BYTES) {
             return new Created(null, TOO_LARGE_NOTE);
         }
@@ -133,7 +155,13 @@ public class AiDocumentService {
         file.setId(UUID.randomUUID());
         file.setOwnerLoginId(loginId.trim());
         file.setFileName(fileName(clean.fileName(), format, LocalDateTime.now()));
-        file.setContentType(DOCX.equals(format) ? DOCX_TYPE : XLSX_TYPE);
+        // file.setContentType(DOCX.equals(format) ? DOCX_TYPE : XLSX_TYPE);
+        file.setContentType(switch (format) {
+            case DOCX -> DOCX_TYPE;
+            case XLSX -> XLSX_TYPE;
+            case PDF -> PDF_TYPE;
+            default -> CSV_TYPE;
+        });
         file.setSizeBytes((long) bytes.length);
         file.setContent(bytes);
         file.setSpec(MAPPER.writeValueAsString(clean));
@@ -175,9 +203,11 @@ public class AiDocumentService {
      * Blank: AI-answer-yyyyMMdd-HHmm.
      */
     static String fileName(String name, String format, LocalDateTime now) {
-        String extension = DOCX.equals(format) ? ".docx" : ".xlsx";
+        // String extension = DOCX.equals(format) ? ".docx" : ".xlsx";
+        String extension = "." + format.toLowerCase(Locale.ROOT);
         String clean = name != null ? BAD_FILE_NAME_CHARS.matcher(name).replaceAll("").trim() : "";
-        clean = clean.replaceAll("(?i)\\.(docx|xlsx|doc|xls)$", "");
+        // clean = clean.replaceAll("(?i)\\.(docx|xlsx|doc|xls)$", "");
+        clean = clean.replaceAll("(?i)\\.(docx|xlsx|doc|xls|pdf|csv)$", "");
         if (clean.length() > MAX_FILE_NAME_CHARS) {
             clean = clean.substring(0, MAX_FILE_NAME_CHARS);
         }
@@ -442,6 +472,54 @@ public class AiDocumentService {
                 cell.setColor("F2F2F2");
             }
         }
+    }
+
+    // ---- PDF ----
+
+    /** Same blocks as Word, laid out on A4 pages with an embedded Korean font (AiPdfBuilder). */
+    static byte[] buildPdf(FileSpec spec) throws IOException {
+        return AiPdfBuilder.build(spec);
+    }
+
+    // ---- CSV ----
+
+    /**
+     * The first table as UTF-8 CSV with a BOM (so Excel reads Hangul), CRLF line ends and fields
+     * quoted when they hold a comma, quote or line break. A text cell starting with =, +, - or @
+     * gets a leading ' so a spreadsheet doesn't run it as a formula; numbers such as -2 stay as
+     * they are.
+     */
+    static byte[] buildCsv(FileSpec spec) {
+        BlockSpec table = spec.blocks().stream().filter(AiDocumentService::isTable).findFirst().orElseThrow();
+        // Byte order mark
+        StringBuilder csv = new StringBuilder().appendCodePoint(0xFEFF);
+        appendCsvRow(csv, table.columns());
+        for (List<String> row : table.rows()) {
+            appendCsvRow(csv, row);
+        }
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void appendCsvRow(StringBuilder csv, List<String> cells) {
+        for (int c = 0; c < cells.size(); c++) {
+            if (c > 0) {
+                csv.append(',');
+            }
+            csv.append(csvField(cells.get(c)));
+        }
+        csv.append("\r\n");
+    }
+
+    static String csvField(String value) {
+        String field = value != null ? value : "";
+        if (!field.isEmpty() && "=+-@\t\r".indexOf(field.charAt(0)) >= 0
+            && !NUMBER.matcher(field.trim()).matches()) {
+            field = "'" + field;
+        }
+        if (field.contains(",") || field.contains("\"") || field.contains("\n") || field.contains("\r")) {
+            field = "\"" + field.replace("\"", "\"\"") + "\"";
+        }
+        return field;
     }
 
     // ---- Excel ----

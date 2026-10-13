@@ -180,6 +180,10 @@ class AiAnswerWithFileTest {
         ReflectionTestUtils.setField(service, "earsAlertService", mock(EarsAlertService.class));
         ReflectionTestUtils.setField(service, "fileTextExtractorService", new FileTextExtractorService());
         ReflectionTestUtils.setField(service, "aiDocumentService", documentService);
+        AiChatHistoryService chatHistoryService = mock(AiChatHistoryService.class);
+        when(chatHistoryService.save(any(), any(), any(), any(), any()))
+            .thenReturn(new AiChatHistoryService.Saved(7L, 70L));
+        ReflectionTestUtils.setField(service, "aiChatHistoryService", chatHistoryService);
         return service;
     }
 

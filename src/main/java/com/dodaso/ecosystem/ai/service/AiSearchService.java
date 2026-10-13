@@ -3,6 +3,7 @@ package com.dodaso.ecosystem.ai.service;
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
 import com.dodaso.ecosystem.ai.dto.AiAlertDTO;
 import com.dodaso.ecosystem.ai.dto.AiChatFileDTO;
+import com.dodaso.ecosystem.ai.dto.AiChatTurnDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiGeneratedFileDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
@@ -74,6 +75,9 @@ public class AiSearchService {
     AiDocumentService aiDocumentService;
 
     @Autowired
+    AiChatHistoryService aiChatHistoryService;
+
+    @Autowired
     VectorStore vectorStore;
 
     // Self-injection to ensure Spring proxy is used (fixes @Transactional self-invocation)
@@ -132,7 +136,9 @@ private final ChatClient chatClient = null;
     /**
      * Answers a prompt from the same results search() returns for its search text (the prompt
      * when none is sent), and returns those results as the answer's sources so the page can link
-     * the [n] citations. Earlier turns in the request's history are passed to the model.
+     * the [n] citations. Earlier turns in the request's history are passed to the model; with a
+     * conversationId they come from the saved chat instead. With a loginId the question and answer
+     * are saved to the chat (a new one when conversationId is null) and its id is returned.
      */
     public AiGenerateDTO generate(AiGenerateDTO request) {
         if (request == null || request.getGeneratePrompt() == null
@@ -144,6 +150,16 @@ private final ChatClient chatClient = null;
         }
         String prompt = request.getGeneratePrompt().trim();
         long start = System.currentTimeMillis();
+        String loginId = request.getLoginId() != null && !request.getLoginId().isBlank()
+            ? request.getLoginId().trim() : null;
+        // A saved chat's history comes from the database, never from the client
+        List<AiChatTurnDTO> history = request.getHistory();
+        if (request.getConversationId() != null) {
+            if (aiChatHistoryService.findOwned(request.getConversationId(), loginId).isEmpty()) {
+                throw new AiChatHistoryService.ChatNotFoundException(request.getConversationId());
+            }
+            history = aiChatHistoryService.recentTurns(request.getConversationId());
+        }
 
         // List<AiSearchResultDTO> sources = findResults(request.getProjectId(), prompt);
         String searchText = request.getSearchText() != null && !request.getSearchText().trim().isEmpty()
@@ -167,7 +183,9 @@ private final ChatClient chatClient = null;
         List<AiRagService.AttachedFile> files = extractFiles(request.getFiles());
         // String answer = aiRagService.answer(prompt, sources, request.getHistory(), alerts,
         //     request.getLoginId(), files);
-        AiRagService.AiAnswer reply = aiRagService.answerWithFile(prompt, sources, request.getHistory(),
+        // AiRagService.AiAnswer reply = aiRagService.answerWithFile(prompt, sources, request.getHistory(),
+        //     alerts, request.getLoginId(), files);
+        AiRagService.AiAnswer reply = aiRagService.answerWithFile(prompt, sources, history,
             alerts, request.getLoginId(), files);
         String answer = reply.text();
         List<AiGeneratedFileDTO> generatedFiles = new ArrayList<>();
@@ -201,6 +219,20 @@ private final ChatClient chatClient = null;
         response.setSources(sources);
         response.setAlerts(alerts);
         response.setGeneratedFiles(generatedFiles);
+        response.setConversationId(request.getConversationId());
+        if (loginId != null) {
+            // A failed save keeps the answer; the chat just won't have this turn
+            try {
+                AiChatHistoryService.Saved saved = aiChatHistoryService.save(request.getConversationId(),
+                    loginId, request.getAppCode(), request.getProjectId(),
+                    new AiChatHistoryService.Turn(prompt, answer, searchText, sources, request.getFiles(),
+                        generatedFiles, System.currentTimeMillis() - start));
+                response.setConversationId(saved.conversationId());
+                response.setMessageId(saved.messageId());
+            } catch (Exception e) {
+                log.error("Could not save the chat turn for {}", loginId, e);
+            }
+        }
         return response;
     }
 

@@ -2,6 +2,7 @@ package com.dodaso.ecosystem.ai.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,6 +11,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -22,13 +24,18 @@ import com.dodaso.ecosystem.ai.dto.AiAlertDTO;
 import com.dodaso.ecosystem.ai.dto.AiChatFileDTO;
 import com.dodaso.ecosystem.ai.dto.AiChatTurnDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
+import com.dodaso.ecosystem.ai.dto.AiGeneratedFileDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
+import com.dodaso.ecosystem.ai.entity.AiChatConversation;
 import com.dodaso.ecosystem.ai.entity.EcwsEmbedding;
 import com.dodaso.ecosystem.ai.repository.EcwsEmbeddingRepository;
 import com.dodaso.ecosystem.ai.repository.EcwsSearchHistoryRepository;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -49,6 +56,7 @@ class AiSearchGenerateTest {
     private EarsAlertService earsAlertService;
     private AiSearchService searchService;
     private AiDocumentService documentService;
+    private AiChatHistoryService chatHistoryService;
 
     @BeforeEach
     void setUp() {
@@ -70,6 +78,10 @@ class AiSearchGenerateTest {
         ReflectionTestUtils.setField(searchService, "earsAlertService", earsAlertService);
         ReflectionTestUtils.setField(searchService, "fileTextExtractorService", new FileTextExtractorService());
         ReflectionTestUtils.setField(searchService, "aiDocumentService", documentService);
+        chatHistoryService = mock(AiChatHistoryService.class);
+        when(chatHistoryService.save(any(), any(), any(), any(), any()))
+            .thenReturn(new AiChatHistoryService.Saved(7L, 70L));
+        ReflectionTestUtils.setField(searchService, "aiChatHistoryService", chatHistoryService);
     }
 
     private static EcwsEmbedding emb(String type, Long sourceId, Long taskId, String text) {
@@ -431,5 +443,110 @@ class AiSearchGenerateTest {
             List.of(new AiRagService.AttachedFile("notes.txt", "Release is on Friday")));
 
         assertEquals("The release is on Friday.", answer);
+    }
+    @Test
+    void withoutLoginIdNothingIsSaved() {
+        AiGenerateDTO response = searchService.generate(request("login issue", 1L));
+
+        verifyNoInteractions(chatHistoryService);
+        assertNull(response.getConversationId());
+        assertNull(response.getMessageId());
+    }
+
+    @Test
+    void firstAnsweredQuestionIsSavedAsANewChat() {
+        when(embeddingRepository.findSimilarAll(eq(1L), anyString(), anyInt()))
+            .thenReturn(List.of(emb(TASK, 12L, 12L, "Fix the login page")));
+        when(ragService.answerWithFile(any(), any(), any(), any(), any(), any()))
+            .thenReturn(new AiRagService.AiAnswer("Fix it [1].", null));
+        AiGenerateDTO request = request(" login issue ", 1L);
+        request.setLoginId(" kim ");
+        request.setFiles(List.of(new AiChatFileDTO("notes.txt", "abc".getBytes())));
+        request.setSearchTasksWithFiles(true);
+
+        AiGenerateDTO response = searchService.generate(request);
+
+        ArgumentCaptor<AiChatHistoryService.Turn> turn = ArgumentCaptor.forClass(AiChatHistoryService.Turn.class);
+        verify(chatHistoryService).save(isNull(), eq("kim"), isNull(), eq(1L), turn.capture());
+        assertEquals("login issue", turn.getValue().question());
+        assertEquals("Fix it [1].", turn.getValue().answer());
+        assertEquals("login issue", turn.getValue().searchText());
+        assertEquals(response.getSources(), turn.getValue().sources());
+        assertEquals("notes.txt", turn.getValue().attachedFiles().get(0).getFileName());
+        assertEquals(7L, response.getConversationId());
+        assertEquals(70L, response.getMessageId());
+        verify(chatHistoryService, never()).findOwned(any(), any());
+    }
+
+    @Test
+    void followUpInASavedChatTakesItsHistoryFromTheDatabase() {
+        AiChatConversation chat = new AiChatConversation();
+        chat.setId(7L);
+        when(chatHistoryService.findOwned(7L, "kim")).thenReturn(Optional.of(chat));
+        List<AiChatTurnDTO> saved = List.of(new AiChatTurnDTO("login issue", "Login fails [1]."));
+        when(chatHistoryService.recentTurns(7L)).thenReturn(saved);
+        AiGenerateDTO request = request("what about Safari?", 1L);
+        request.setLoginId("kim");
+        request.setConversationId(7L);
+        // A client-made history is ignored for a saved chat
+        request.setHistory(List.of(new AiChatTurnDTO("made up", "made up")));
+
+        AiGenerateDTO response = searchService.generate(request);
+
+        verify(ragService).answerWithFile(eq("what about Safari?"), any(), eq(saved), any(), eq("kim"), any());
+        verify(chatHistoryService).save(eq(7L), eq("kim"), isNull(), eq(1L), any());
+        assertEquals(7L, response.getConversationId());
+    }
+
+    @Test
+    void anotherUsersChatIsRejectedBeforeAnswering() {
+        when(chatHistoryService.findOwned(7L, "lee")).thenReturn(Optional.empty());
+        AiGenerateDTO request = request("what about Safari?", 1L);
+        request.setLoginId("lee");
+        request.setConversationId(7L);
+
+        assertThrows(AiChatHistoryService.ChatNotFoundException.class, () -> searchService.generate(request));
+
+        verifyNoInteractions(ragService, embeddingRepository);
+        verify(chatHistoryService, never()).save(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void conversationIdWithoutLoginIdIsRejected() {
+        AiGenerateDTO request = request("what about Safari?", 1L);
+        request.setConversationId(7L);
+
+        assertThrows(AiChatHistoryService.ChatNotFoundException.class, () -> searchService.generate(request));
+        verifyNoInteractions(ragService);
+    }
+
+    @Test
+    void failedSaveStillReturnsTheAnswer() {
+        when(chatHistoryService.save(any(), any(), any(), any(), any()))
+            .thenThrow(new IllegalStateException("database down"));
+        AiGenerateDTO request = request("login issue", 1L);
+        request.setLoginId("kim");
+
+        AiGenerateDTO response = searchService.generate(request);
+
+        assertEquals("answer", response.getGeneratedText());
+        assertNull(response.getConversationId());
+    }
+
+    @Test
+    void madeFilesAreSavedWithTheTurn() throws Exception {
+        AiAnswerSpec.FileSpec spec = new AiAnswerSpec.FileSpec("DOCX", "Summary", null, List.of());
+        when(ragService.answerWithFile(any(), any(), any(), any(), any(), any()))
+            .thenReturn(new AiRagService.AiAnswer("Here it is.", spec));
+        AiGeneratedFileDTO made = AiGeneratedFileDTO.builder().id(UUID.randomUUID()).fileName("Summary.docx").build();
+        when(documentService.create(eq(spec), eq("kim"), any())).thenReturn(new AiDocumentService.Created(made, null));
+        AiGenerateDTO request = request("summarize as Word", 1L);
+        request.setLoginId("kim");
+
+        searchService.generate(request);
+
+        ArgumentCaptor<AiChatHistoryService.Turn> turn = ArgumentCaptor.forClass(AiChatHistoryService.Turn.class);
+        verify(chatHistoryService).save(isNull(), eq("kim"), isNull(), eq(1L), turn.capture());
+        assertEquals(List.of(made), turn.getValue().generatedFiles());
     }
 }

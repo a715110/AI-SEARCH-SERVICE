@@ -5,6 +5,7 @@ import com.dodaso.ecosystem.ai.container.AiSearchSyncDTOContainer;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchSyncDTO;
+import com.dodaso.ecosystem.ai.service.AiChatHistoryService;
 import com.dodaso.ecosystem.ai.service.AiRagService;
 import com.dodaso.ecosystem.ai.service.AiSearchService;
 import com.dodaso.ecosystem.baseline.common.controller.RESTServiceController;
@@ -34,7 +35,14 @@ public class AiRagController extends RESTServiceController<AiSearchSyncDTOContai
     public ResponseEntity<?> generate(@RequestBody AiGenerateDTOContainer requestBody) throws Exception {
         // AiGenerateDTOContainer returnValue = aiRagService.generate(requestBody);
         AiGenerateDTOContainer returnValue = new AiGenerateDTOContainer();
-        returnValue.setAiGenerateDTO(aiSearchService.generate(requestBody.getAiGenerateDTO()));
+        // returnValue.setAiGenerateDTO(aiSearchService.generate(requestBody.getAiGenerateDTO()));
+        try {
+            returnValue.setAiGenerateDTO(aiSearchService.generate(requestBody.getAiGenerateDTO()));
+        } catch (AiChatHistoryService.ChatNotFoundException e) {
+            // Another user's, deleted or unknown chat
+            returnValue.setResultMessage("Chat not found");
+            return new ResponseEntity<>(returnValue, HttpStatus.NOT_FOUND);
+        }
         return new ResponseEntity<>(returnValue, HttpStatus.OK);
     }
 

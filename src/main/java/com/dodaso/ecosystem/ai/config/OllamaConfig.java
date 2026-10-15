@@ -11,7 +11,8 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.ollama.api.OllamaApi;
-import org.springframework.ai.ollama.api.OllamaOptions;
+// import org.springframework.ai.ollama.api.OllamaOptions;
+import org.springframework.ai.ollama.api.OllamaChatOptions;
 import org.springframework.ai.ollama.management.ModelManagementOptions;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.beans.factory.annotation.Value;
@@ -45,7 +46,8 @@ public class OllamaConfig {
       @Value("${spring.ai.ollama.chat.options.model}") String chatModel,
       @Value("${spring.ai.ollama.chat.options.temperature}") double temperature) {
 
-    OllamaOptions defaultOptions = OllamaOptions.builder()
+    // OllamaOptions defaultOptions = OllamaOptions.builder()
+    OllamaChatOptions defaultOptions = OllamaChatOptions.builder()
         .model(chatModel)
         .temperature(temperature)
         .build();

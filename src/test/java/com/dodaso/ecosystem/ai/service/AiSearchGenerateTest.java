@@ -275,7 +275,8 @@ class AiSearchGenerateTest {
         AiAlertDTO onTask = alert(2, EarsAlertService.TASK_TABLE, 12, "Task past due");
         when(earsAlertService.findUserPastDueAlerts("kim")).thenReturn(List.of(pastDue, onTask));
         when(earsAlertService.findUserAlerts("kim")).thenReturn(List.of(mine, onTask));
-        when(earsAlertService.findTaskAlerts(List.of(12L, 12L))).thenReturn(List.of(onTask));
+        // when(earsAlertService.findTaskAlerts(List.of(12L, 12L))).thenReturn(List.of(onTask));
+        when(earsAlertService.findTaskAlertsFor("kim", List.of(12L, 12L))).thenReturn(List.of(onTask));
         AiGenerateDTO request = request("what is overdue?", 1L);
         request.setLoginId("kim");
 

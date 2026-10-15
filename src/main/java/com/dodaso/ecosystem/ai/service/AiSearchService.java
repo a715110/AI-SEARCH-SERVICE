@@ -265,14 +265,17 @@ private final ChatClient chatClient = null;
 
     /**
      * EARS alerts for an answer: the user's unread past-due ones and newest ones (when the request
-     * has a login id), then those on the source tasks, once each, in that order.
+     * has a login id), then those on the source tasks that were sent to the user, once each, in
+     * that order.
      */
     List<AiAlertDTO> findAlerts(String loginId, List<AiSearchResultDTO> sources) {
         Map<Integer, AiAlertDTO> byId = new LinkedHashMap<>();
         // List<AiAlertDTO> found = new ArrayList<>(earsAlertService.findUserAlerts(loginId));
         List<AiAlertDTO> found = new ArrayList<>(earsAlertService.findUserPastDueAlerts(loginId));
         found.addAll(earsAlertService.findUserAlerts(loginId));
-        found.addAll(earsAlertService.findTaskAlerts(
+        // found.addAll(earsAlertService.findTaskAlerts(
+        //     sources.stream().map(AiSearchResultDTO::getTaskId).collect(Collectors.toList())));
+        found.addAll(earsAlertService.findTaskAlertsFor(loginId,
             sources.stream().map(AiSearchResultDTO::getTaskId).collect(Collectors.toList())));
         for (AiAlertDTO alert : found) {
             if (alert != null) {

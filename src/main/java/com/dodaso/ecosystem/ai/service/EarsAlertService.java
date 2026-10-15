@@ -95,6 +95,32 @@ public class EarsAlertService {
             + "&sourceReferenceIds=" + idList + "&size=" + MAX_ALERTS, "tasks " + idList);
     }
 
+    /**
+     * The newest alerts and reminders about these tasks that were sent to loginId. Alerts sent to
+     * other people about the same tasks are left out: an answer must not show more than the user
+     * can see. EARS can't filter by recipient here, so more are fetched and filtered.
+     */
+    public List<AiAlertDTO> findTaskAlertsFor(String loginId, Collection<Long> taskIds) {
+        if (loginId == null || loginId.trim().isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<Long> ids = taskIds == null ? List.of() : taskIds.stream()
+            .filter(Objects::nonNull)
+            .distinct()
+            .collect(Collectors.toList());
+        if (ids.isEmpty()) {
+            return new ArrayList<>();
+        }
+        String idList = ids.stream().map(String::valueOf).collect(Collectors.joining(","));
+        String login = loginId.trim();
+        return fetch(SOURCES_ENDPOINT + "?sourceReferenceTable=" + TASK_TABLE
+                + "&sourceReferenceIds=" + idList + "&size=" + MAX_PAST_DUE_FETCHED,
+                "tasks " + idList + " for " + login).stream()
+            .filter(alert -> alert != null && login.equalsIgnoreCase(alert.getRecipientValue()))
+            .limit(MAX_ALERTS)
+            .collect(Collectors.toList());
+    }
+
     private List<AiAlertDTO> fetch(String endpoint, String description) {
         try {
             AlertPage page = restServiceClient.callRESTService(

@@ -62,6 +62,20 @@ class EarsAlertServiceTest {
     }
 
     @Test
+    void taskAlertsForAUserLeaveOutAlertsSentToOthers() throws Exception {
+        AiAlertDTO mine = AiAlertDTO.builder().id(2).recipientValue("Kim@dodaso.com").build();
+        AiAlertDTO other = AiAlertDTO.builder().id(3).recipientValue("lee@dodaso.com").build();
+        when(restServiceClient.callRESTService(eq("ears_service"),
+            eq("/eventReminderController/event-alert-reminder/sources?sourceReferenceTable=collaboration_task"
+                + "&sourceReferenceIds=12&size=" + EarsAlertService.MAX_PAST_DUE_FETCHED),
+            isNull(), any(), eq(HttpMethod.GET), isNull(), any()))
+            .thenReturn(page(other, mine));
+
+        assertEquals(List.of(mine), service.findTaskAlertsFor("kim@dodaso.com", List.of(12L)));
+        assertTrue(service.findTaskAlertsFor(null, List.of(12L)).isEmpty());
+    }
+
+    @Test
     void pastDueAlertsKeepTheNewestPerTaskOrApproval() throws Exception {
         AiAlertDTO task82New = AiAlertDTO.builder().id(30).sourceReferenceTable("collaboration_task")
             .sourceReferenceId(82).subject("Alert: Task Past Due").build();

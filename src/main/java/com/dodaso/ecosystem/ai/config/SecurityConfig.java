@@ -1,11 +1,15 @@
 package com.dodaso.ecosystem.ai.config;
 
+import com.dodaso.ecosystem.baseline.common.security.AccessTokenFilter;
+import com.dodaso.ecosystem.baseline.common.security.SsoJwtDecoders;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
 /**
  * Web security for ai-search (internal REST API, called by ecws-service and the UIs).
@@ -25,15 +29,30 @@ import org.springframework.security.web.SecurityFilterChain;
  * <p>Effective access is unchanged: all requests are permitted. The service is reachable
  * only inside the instance network (never through the public ingress).
  *
- * <p><b>Open (Step 2):</b> validate the caller's JWT here, with the platform key, once the
- * key question for ai-search is settled (SDS Step 1 services addendum, O4).
+ * <p>The caller's SSO access token (X-Access-Token, forwarded by ecws-service and mcp-service) is
+ * validated by {@link AccessTokenFilter}; the chat and generate endpoints then act for the
+ * token's login. Rollout mode while {@code dodaso.authz.token.required} is false: a call without
+ * a token is still served and logged; an invalid token is rejected either way.
  */
 @Configuration
 public class SecurityConfig {
 
+  @Value("${dodaso.instance.auth-issuer-uri}")
+  private String authIssuerUri;
+
+  @Value("${dodaso.authz.token.required:false}")
+  private boolean tokenRequired;
+
+  /** ai-search endpoints have no common prefix, so every path but /actuator is checked. */
+  @Value("${dodaso.authz.token.path-prefix:/}")
+  private String tokenPathPrefix;
+
   @Bean
   public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
     http
+        .addFilterBefore(
+            new AccessTokenFilter(SsoJwtDecoders.forIssuer(authIssuerUri), tokenRequired, tokenPathPrefix),
+            AuthorizationFilter.class)
         // Stateless REST API: no browser session, no form posts -> CSRF does not apply.
         .csrf(AbstractHttpConfigurer::disable)
         .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

@@ -3,6 +3,7 @@ package com.dodaso.ecosystem.ai.controller;
 import com.dodaso.ecosystem.ai.container.AiGeneratedFileDTOContainer;
 import com.dodaso.ecosystem.ai.dto.AiGeneratedFileDTO;
 import com.dodaso.ecosystem.ai.service.AiDocumentService;
+import com.dodaso.ecosystem.baseline.common.security.CallerLogin;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,7 +33,8 @@ public class AiChatFileController {
         AiGeneratedFileDTOContainer returnValue = new AiGeneratedFileDTOContainer();
         AiGeneratedFileDTO requested = requestBody != null ? requestBody.getAiGeneratedFileDTO() : null;
         Optional<AiGeneratedFileDTO> file = requested == null ? Optional.empty()
-            : aiDocumentService.download(requested.getId(), requestBody.getLoginId());
+            : aiDocumentService.download(requested.getId(),
+                CallerLogin.actingFor(requestBody.getLoginId(), "generated file download"));
         if (file.isEmpty()) {
             returnValue.setResultMessage("File not found or expired");
             return new ResponseEntity<>(returnValue, HttpStatus.NOT_FOUND);

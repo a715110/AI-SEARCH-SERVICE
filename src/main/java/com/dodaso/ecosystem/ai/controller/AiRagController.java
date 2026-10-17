@@ -9,6 +9,7 @@ import com.dodaso.ecosystem.ai.service.AiChatHistoryService;
 import com.dodaso.ecosystem.ai.service.AiRagService;
 import com.dodaso.ecosystem.ai.service.AiSearchService;
 import com.dodaso.ecosystem.baseline.common.controller.RESTServiceController;
+import com.dodaso.ecosystem.baseline.common.security.CallerLogin;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,6 +37,11 @@ public class AiRagController extends RESTServiceController<AiSearchSyncDTOContai
         // AiGenerateDTOContainer returnValue = aiRagService.generate(requestBody);
         AiGenerateDTOContainer returnValue = new AiGenerateDTOContainer();
         // returnValue.setAiGenerateDTO(aiSearchService.generate(requestBody.getAiGenerateDTO()));
+        if (requestBody.getAiGenerateDTO() != null) {
+            // The chat owner and alert recipient: the access token's login when one is sent
+            requestBody.getAiGenerateDTO().setLoginId(
+                CallerLogin.actingFor(requestBody.getAiGenerateDTO().getLoginId(), "AI generate"));
+        }
         try {
             returnValue.setAiGenerateDTO(aiSearchService.generate(requestBody.getAiGenerateDTO()));
         } catch (AiChatHistoryService.ChatNotFoundException e) {

@@ -4,6 +4,7 @@ import com.dodaso.ecosystem.ai.container.AiChatDTOContainer;
 import com.dodaso.ecosystem.ai.dto.AiChatConversationDTO;
 import com.dodaso.ecosystem.ai.dto.AiChatMessageDTO;
 import com.dodaso.ecosystem.ai.service.AiChatHistoryService;
+import com.dodaso.ecosystem.baseline.common.security.CallerLogin;
 import java.util.List;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
@@ -17,8 +18,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Saved AI Search chats: list, open, rename and delete. Every call is for the request's loginId;
- * a chat that is another user's, deleted or unknown gets 404.
+ * Saved AI Search chats: list, open, rename and delete. Every call is for the request's loginId
+ * (the access token's login when one is sent); a chat that is another user's, deleted or unknown
+ * gets 404.
  */
 @RestController
 @RequestMapping("/aiChatController")
@@ -33,6 +35,7 @@ public class AiChatController {
     /** The user's open chats in one app (aiChatConversationDTO.appCode, default ECWS), newest first. */
     @PostMapping(value = "/listConversations", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> listConversations(@RequestBody AiChatDTOContainer requestBody) {
+        actAsCaller(requestBody, "chat list");
         AiChatDTOContainer returnValue = new AiChatDTOContainer();
         String appCode = requestBody.getAiChatConversationDTO() != null
             ? requestBody.getAiChatConversationDTO().getAppCode() : null;
@@ -49,6 +52,7 @@ public class AiChatController {
     /** The chat and all its messages in order. */
     @PostMapping(value = "/getConversation", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> getConversation(@RequestBody AiChatDTOContainer requestBody) {
+        actAsCaller(requestBody, "chat open");
         AiChatDTOContainer returnValue = new AiChatDTOContainer();
         Long id = conversationId(requestBody);
         Optional<AiChatConversationDTO> conversation = aiChatHistoryService.conversation(id, requestBody.getLoginId());
@@ -66,6 +70,7 @@ public class AiChatController {
     /** Renames the chat to aiChatConversationDTO.title. */
     @PostMapping(value = "/renameConversation", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> renameConversation(@RequestBody AiChatDTOContainer requestBody) {
+        actAsCaller(requestBody, "chat rename");
         AiChatDTOContainer returnValue = new AiChatDTOContainer();
         String title = requestBody.getAiChatConversationDTO() != null
             ? requestBody.getAiChatConversationDTO().getTitle() : null;
@@ -87,6 +92,7 @@ public class AiChatController {
     /** Deletes the chat (soft delete); it no longer shows in the list or opens. */
     @PostMapping(value = "/deleteConversation", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> deleteConversation(@RequestBody AiChatDTOContainer requestBody) {
+        actAsCaller(requestBody, "chat delete");
         AiChatDTOContainer returnValue = new AiChatDTOContainer();
         if (!aiChatHistoryService.delete(conversationId(requestBody), requestBody.getLoginId())) {
             returnValue.setResultMessage(NOT_FOUND);
@@ -94,6 +100,10 @@ public class AiChatController {
         }
         returnValue.setResultMessage("Chat deleted");
         return new ResponseEntity<>(returnValue, HttpStatus.OK);
+    }
+
+    private static void actAsCaller(AiChatDTOContainer requestBody, String where) {
+        requestBody.setLoginId(CallerLogin.actingFor(requestBody.getLoginId(), where));
     }
 
     private static Long conversationId(AiChatDTOContainer requestBody) {

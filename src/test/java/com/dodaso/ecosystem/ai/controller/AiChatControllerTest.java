@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.dodaso.ecosystem.ai.container.AiChatDTOContainer;
@@ -15,13 +16,18 @@ import com.dodaso.ecosystem.ai.dto.AiChatMessageDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.service.AiChatHistoryService;
 import com.dodaso.ecosystem.ai.service.AiSearchService;
+import com.dodaso.ecosystem.baseline.common.security.VerifiedCaller;
 import java.util.List;
 import java.util.Optional;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 /** Saved chat endpoints answer 404 for a chat that isn't the caller's. */
 class AiChatControllerTest {
@@ -34,6 +40,43 @@ class AiChatControllerTest {
         historyService = mock(AiChatHistoryService.class);
         controller = new AiChatController();
         ReflectionTestUtils.setField(controller, "aiChatHistoryService", historyService);
+    }
+
+    @AfterEach
+    void clear() {
+        RequestContextHolder.resetRequestAttributes();
+    }
+
+    private static void signIn(String login) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(VerifiedCaller.ATTRIBUTE, new VerifiedCaller(login, List.of()));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    }
+
+    @Test
+    void withATokenTheTokensLoginOwnsTheChats() {
+        signIn("kim");
+        when(historyService.list("kim", null, 0, 0)).thenReturn(List.of(new AiChatConversationDTO()));
+
+        ResponseEntity<?> response = controller.listConversations(request(null, "lee"));
+
+        assertEquals(1, ((AiChatDTOContainer) response.getBody()).getAiChatConversationDTOList().size());
+        verify(historyService).list("kim", null, 0, 0);
+    }
+
+    @Test
+    void withATokenGenerateActsForTheTokensLogin() throws Exception {
+        signIn("kim");
+        AiSearchService searchService = mock(AiSearchService.class);
+        AiRagController ragController = new AiRagController();
+        ReflectionTestUtils.setField(ragController, "aiSearchService", searchService);
+        AiGenerateDTOContainer request = new AiGenerateDTOContainer();
+        request.setAiGenerateDTO(new AiGenerateDTO("q"));
+        request.getAiGenerateDTO().setLoginId("lee");
+
+        ragController.generate(request);
+
+        verify(searchService).generate(org.mockito.ArgumentMatchers.argThat(dto -> "kim".equals(dto.getLoginId())));
     }
 
     private static AiChatDTOContainer request(Long id, String loginId) {

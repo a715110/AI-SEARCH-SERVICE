@@ -100,6 +100,32 @@ class AiSearchGenerateTest {
     }
 
     @Test
+    void resultsOfTasksTheUserMayNotReadNeverReachTheAnswer() {
+        when(embeddingRepository.findSimilarAll(eq(1L), anyString(), anyInt())).thenReturn(List.of(
+            emb(TASK, 12L, 12L, "Fix the login page"),
+            emb(COMMENT, 40L, 99L, "Someone else's login comment"),
+            emb(TASK, 13L, 13L, "Login audit")));
+        AiGenerateDTO request = request("login issue", 1L);
+        request.setReadableTaskIds(List.of(12L, 13L));
+
+        AiGenerateDTO response = searchService.generate(request);
+
+        assertEquals(List.of(12L, 13L), response.getSources().stream().map(r -> r.getTaskId()).toList());
+        verify(ragService).answerWithFile("login issue", response.getSources(), null, List.of(), null, List.of());
+    }
+
+    @Test
+    void withoutReadableTaskIdsEveryResultIsKept() {
+        when(embeddingRepository.findSimilarAll(eq(1L), anyString(), anyInt())).thenReturn(List.of(
+            emb(TASK, 12L, 12L, "Fix the login page"),
+            emb(COMMENT, 40L, 99L, "Another login comment")));
+
+        AiGenerateDTO response = searchService.generate(request("login issue", 1L));
+
+        assertEquals(2, response.getSources().size());
+    }
+
+    @Test
     void answersFromSearchResultsAndReturnsThemAsSources() {
         when(embeddingRepository.findSimilarAll(eq(1L), anyString(), anyInt())).thenReturn(List.of(
             emb(TASK, 12L, 12L, "Fix the login page"),

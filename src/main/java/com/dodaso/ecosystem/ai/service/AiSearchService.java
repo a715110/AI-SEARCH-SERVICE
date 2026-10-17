@@ -23,11 +23,14 @@ import com.dodaso.ecosystem.ecws.dto.CollaborationTaskDTO;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.ai.document.Document;
 import lombok.extern.slf4j.Slf4j;
@@ -171,8 +174,10 @@ private final ChatClient chatClient = null;
             && !Boolean.TRUE.equals(request.getSearchTasksWithFiles());
         // List<AiSearchResultDTO> sources = findResults(request.getProjectId(), searchText);
         // List<AiAlertDTO> alerts = findAlerts(request.getLoginId(), sources);
+        // List<AiSearchResultDTO> sources = fileQuestion ? new ArrayList<>()
+        //     : findResults(request.getProjectId(), searchText);
         List<AiSearchResultDTO> sources = fileQuestion ? new ArrayList<>()
-            : findResults(request.getProjectId(), searchText);
+            : findResults(request.getProjectId(), searchText, request.getReadableTaskIds());
         List<AiAlertDTO> alerts = fileQuestion ? new ArrayList<>()
             : findAlerts(request.getLoginId(), sources);
         // String answer = aiRagService.answer(prompt, sources);
@@ -290,6 +295,16 @@ private final ChatClient chatClient = null;
      * and by generate, which answers from these same results. Doesn't write search history.
      */
     List<AiSearchResultDTO> findResults(Long projectId, String query) {
+        return findResults(projectId, query, null);
+    }
+
+    /**
+     * As findResults(projectId, query), keeping only results of readableTaskIds (null: no
+     * limit). Unreadable results are skipped among the candidates, so up to RESULT_LIMIT readable
+     * ones are still returned and the answer never sees the others.
+     */
+    List<AiSearchResultDTO> findResults(Long projectId, String query, Collection<Long> readableTaskIds) {
+        Set<Long> readable = readableTaskIds != null ? new HashSet<>(readableTaskIds) : null;
         // 1. Get embedding for query
         float[] queryVector = ollamaService.getOllamaEmbedding(query);
 
@@ -311,6 +326,7 @@ private final ChatClient chatClient = null;
 
         // 3. Map to DTOs
         List<AiSearchResultDTO> results = new ArrayList<>();
+        int skipped = 0;
         for (EcwsEmbedding emb : similar) {
             if (results.size() >= RESULT_LIMIT) {
                 break;
@@ -322,6 +338,10 @@ private final ChatClient chatClient = null;
                     emb.getSourceType(), emb.getSourceId());
                 continue;
             }
+            if (readable != null && !readable.contains(taskId)) {
+                skipped++;
+                continue;
+            }
             results.add(AiSearchResultDTO.builder()
                 .sourceId(emb.getSourceId())
                 .sourceType(emb.getSourceType())
@@ -330,6 +350,9 @@ private final ChatClient chatClient = null;
                 .chunkText(emb.getChunkText())
                 .score(0.95) // Placeholder score
                 .build());
+        }
+        if (skipped > 0) {
+            log.info("Left out {} search result(s) of tasks the user may not read", skipped);
         }
         return results;
     }

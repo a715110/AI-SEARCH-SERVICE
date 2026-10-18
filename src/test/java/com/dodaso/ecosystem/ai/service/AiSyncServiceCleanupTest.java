@@ -36,7 +36,7 @@ class AiSyncServiceCleanupTest {
     private static final String TASK = EmbeddingSourceTypeEnum.COLLABORATION_TASK.getSourceType();
     private static final String COMMENT = EmbeddingSourceTypeEnum.TASK_COMMENT.getSourceType();
 
-    private static final String TASKS_EP = "/collaborationTaskController/findCollaborationTasks";
+    private static final String TASKS_EP = "/collaborationTaskController/findAllTasksForSync";
     private static final String ACTIVE_COMMENTS_EP = "/collaborationTaskController/findAllActiveComments";
     private static final String LIVE_COMMENT_IDS_EP = "/collaborationTaskController/findLiveCommentIds";
 

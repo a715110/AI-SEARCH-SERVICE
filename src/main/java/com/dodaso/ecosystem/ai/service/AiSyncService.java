@@ -277,7 +277,8 @@ public class AiSyncService {
             RESTReqContainer<CollaborationTaskDTOContainer> restReqContainer =
                 new RESTReqContainer<>(
                     ServiceDiscoveryEnum.ecws_service.getServiceDiscoveryName(),
-                    "/collaborationTaskController/findCollaborationTasks",
+                    // "/collaborationTaskController/findCollaborationTasks",
+                    "/collaborationTaskController/findAllTasksForSync",
                     requestContainer,
                     new ParameterizedTypeReference<CollaborationTaskDTOContainer>() {
                     },
@@ -382,7 +383,8 @@ public class AiSyncService {
             RESTReqContainer<CollaborationTaskDTOContainer> restReqContainer =
                 new RESTReqContainer<>(
                     ServiceDiscoveryEnum.ecws_service.getServiceDiscoveryName(),
-                    "/collaborationTaskController/findCollaborationTaskById",
+                    // "/collaborationTaskController/findCollaborationTaskById",
+                    "/collaborationTaskController/findTaskForSync",
                     requestContainer,
                     new ParameterizedTypeReference<CollaborationTaskDTOContainer>() {
                     },

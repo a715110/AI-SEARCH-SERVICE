@@ -217,7 +217,8 @@ public class AiFileSyncService {
 
                     RESTReqContainer<FileAttachmentDTOContainer> downloadReq = new RESTReqContainer<>(
                         ServiceDiscoveryEnum.ecws_service.getServiceDiscoveryName(),
-                        "/fileAttachmentController/downloadFileAttachment",
+                        // "/fileAttachmentController/downloadFileAttachment",
+                        "/fileAttachmentController/downloadFileForSync",
                         downloadRequest,
                         new ParameterizedTypeReference<FileAttachmentDTOContainer>() {},
                         HttpMethod.POST

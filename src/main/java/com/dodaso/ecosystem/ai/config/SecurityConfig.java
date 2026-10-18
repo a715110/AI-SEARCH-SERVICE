@@ -2,6 +2,7 @@ package com.dodaso.ecosystem.ai.config;
 
 import com.dodaso.ecosystem.baseline.common.security.AccessTokenFilter;
 import com.dodaso.ecosystem.baseline.common.security.SsoJwtDecoders;
+import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -47,11 +48,16 @@ public class SecurityConfig {
   @Value("${dodaso.authz.token.path-prefix:/}")
   private String tokenPathPrefix;
 
+  /** Endpoints other services call with no user; none today. */
+  @Value("${dodaso.authz.token.service-paths:}")
+  private List<String> tokenServicePaths;
+
   @Bean
   public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
     http
         .addFilterBefore(
-            new AccessTokenFilter(SsoJwtDecoders.forIssuer(authIssuerUri), tokenRequired, tokenPathPrefix),
+            new AccessTokenFilter(SsoJwtDecoders.forIssuer(authIssuerUri), tokenRequired, tokenPathPrefix,
+                tokenServicePaths),
             AuthorizationFilter.class)
         // Stateless REST API: no browser session, no form posts -> CSRF does not apply.
         .csrf(AbstractHttpConfigurer::disable)

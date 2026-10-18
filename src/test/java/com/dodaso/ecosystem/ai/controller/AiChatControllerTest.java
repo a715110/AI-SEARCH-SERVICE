@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.dodaso.ecosystem.ai.container.AiChatDTOContainer;
@@ -16,6 +17,7 @@ import com.dodaso.ecosystem.ai.dto.AiChatMessageDTO;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.service.AiChatHistoryService;
 import com.dodaso.ecosystem.ai.service.AiSearchService;
+import com.dodaso.ecosystem.baseline.common.config.CompanySettings;
 import com.dodaso.ecosystem.baseline.common.security.VerifiedCaller;
 import java.util.List;
 import java.util.Optional;
@@ -70,6 +72,7 @@ class AiChatControllerTest {
         AiSearchService searchService = mock(AiSearchService.class);
         AiRagController ragController = new AiRagController();
         ReflectionTestUtils.setField(ragController, "aiSearchService", searchService);
+        ReflectionTestUtils.setField(ragController, "companySettings", new CompanySettings(null, null));
         AiGenerateDTOContainer request = new AiGenerateDTOContainer();
         request.setAiGenerateDTO(new AiGenerateDTO("q"));
         request.getAiGenerateDTO().setLoginId("lee");
@@ -132,10 +135,27 @@ class AiChatControllerTest {
     }
 
     @Test
+    void generateIsRefusedWhileAnswersAreOffForTheCompany() throws Exception {
+        AiSearchService searchService = mock(AiSearchService.class);
+        AiRagController ragController = new AiRagController();
+        ReflectionTestUtils.setField(ragController, "aiSearchService", searchService);
+        ReflectionTestUtils.setField(ragController, "companySettings", new CompanySettings(null, "off"));
+        AiGenerateDTOContainer request = new AiGenerateDTOContainer();
+        request.setAiGenerateDTO(new AiGenerateDTO("q"));
+
+        ResponseEntity<?> response = ragController.generate(request);
+
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        assertEquals(AiRagController.ANSWERS_OFF, ((AiGenerateDTOContainer) response.getBody()).getResultMessage());
+        verifyNoInteractions(searchService);
+    }
+
+    @Test
     void generateInAnotherUsersChatIsNotFound() throws Exception {
         AiSearchService searchService = mock(AiSearchService.class);
         AiRagController ragController = new AiRagController();
         ReflectionTestUtils.setField(ragController, "aiSearchService", searchService);
+        ReflectionTestUtils.setField(ragController, "companySettings", new CompanySettings(null, null));
         when(searchService.generate(any())).thenThrow(new AiChatHistoryService.ChatNotFoundException(7L));
         AiGenerateDTOContainer request = new AiGenerateDTOContainer();
         request.setAiGenerateDTO(new AiGenerateDTO("q"));

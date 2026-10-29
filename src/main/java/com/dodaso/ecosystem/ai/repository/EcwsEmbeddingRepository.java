@@ -29,8 +29,9 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
      */
     @Query(value = """
         SELECT *
-        FROM ecws_embeddings
-        WHERE project_id = :projectId
+        FROM dodaso_embeddings
+        WHERE app_code = 'ECWS'
+        AND project_id = :projectId
         AND workspace_id = :workspaceId
         ORDER BY embedding <=> (:queryVector)::vector
         LIMIT :limit""", nativeQuery = true)
@@ -45,6 +46,7 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
      * can map all fields including parent_source_id correctly.
      * ATTACH-CS: task_id added to the column list; without it the new EcwsEmbedding.taskId field
      * can't be mapped and every search fails (plan §7.5). The list was otherwise unchanged.
+     * Every EcwsEmbedding column must be listed here, including the ones ELCM rows use.
      */
     @Query(value = """
         SELECT id, source_type, source_id, chunk_index, chunk_text, chunk_tokens,
@@ -52,9 +54,11 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
                created_by_user_id, updated_by_user_id, workspace_id, user_id,
                source_updated_at, priority, requestor, due_date, scheduled_date,
                parent_source_id, task_id,
+               company_id, app_code, scope_id, owner_type, owner_id, title, embedding_model,
                created_at, created_by, updated_at, updated_by
-        FROM ecws_embeddings
-        WHERE project_id = :projectId
+        FROM dodaso_embeddings
+        WHERE app_code = 'ECWS'
+          AND project_id = :projectId
         ORDER BY embedding <=> (:queryVector)::vector
         LIMIT :limit""", nativeQuery = true)
     List<EcwsEmbedding> findSimilarAll(@Param("projectId") Long projectId,
@@ -67,8 +71,9 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
      */
     @Query(value = """
         SELECT *
-        FROM ecws_embeddings
-        WHERE project_id = :projectId
+        FROM dodaso_embeddings
+        WHERE app_code = 'ECWS'
+          AND project_id = :projectId
           AND (
             (workspace_id = 1 AND source_id        = :taskId)
          OR (workspace_id = 2 AND parent_source_id = :taskId)
@@ -86,8 +91,9 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
      */
     @Query(value = """
         SELECT *
-        FROM ecws_embeddings
-        WHERE project_id = :projectId
+        FROM dodaso_embeddings
+        WHERE app_code = 'ECWS'
+          AND project_id = :projectId
           AND workspace_id = 4
           AND parent_source_id = :commentId
         ORDER BY embedding <=> (:queryVector)::vector
@@ -102,8 +108,9 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
      */
     @Query(value = """
         SELECT *
-        FROM ecws_embeddings
-        WHERE project_id = :projectId
+        FROM dodaso_embeddings
+        WHERE app_code = 'ECWS'
+          AND project_id = :projectId
           AND workspace_id = 1
           AND (:priority    IS NULL OR priority  = :priority)
           AND (:dueDateFrom IS NULL OR due_date >= CAST(:dueDateFrom AS date))

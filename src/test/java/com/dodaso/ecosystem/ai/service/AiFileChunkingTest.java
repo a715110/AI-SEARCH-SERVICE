@@ -88,6 +88,17 @@ class AiFileChunkingTest {
     }
 
     @Test
+    void storesEcwsAppCodeAndEmbeddingModel() {
+        when(ollamaService.getEmbeddingModel()).thenReturn("nomic-embed-text");
+
+        syncService.syncChunks(TASK_FILE, 536L, List.of(chunk(0, 2), chunk(1, 2)));
+
+        List<EcwsEmbedding> rows = savedRows();
+        assertTrue(rows.stream().allMatch(r -> "ECWS".equals(r.getAppCode())));
+        assertTrue(rows.stream().allMatch(r -> "nomic-embed-text".equals(r.getEmbeddingModel())));
+    }
+
+    @Test
     void deletesOldRowsOnceBeforeSavingAndMarksCompleted() {
         syncService.syncChunks(TASK_FILE, 536L, List.of(chunk(0, 2), chunk(1, 2)));
 

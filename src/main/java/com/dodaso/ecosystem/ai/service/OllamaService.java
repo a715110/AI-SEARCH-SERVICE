@@ -40,6 +40,11 @@ public class OllamaService {
         this.embeddingModel = embeddingModel;
     }
 
+    /** Model name stored with each vector (dodaso_embeddings.embedding_model). */
+    public String getEmbeddingModel() {
+        return embeddingModel;
+    }
+
     /** "http://ollama:11434/" -> "http://ollama:11434" so paths can be appended safely. */
     static String stripTrailingSlash(String url) {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;

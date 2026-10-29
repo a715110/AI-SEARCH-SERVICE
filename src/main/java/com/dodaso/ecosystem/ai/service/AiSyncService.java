@@ -1,5 +1,6 @@
 package com.dodaso.ecosystem.ai.service;
 
+import com.dodaso.ecosystem.ai.constant.AppCodeEnum;
 import com.dodaso.ecosystem.ai.constant.EcwsProjectEnum;
 import com.dodaso.ecosystem.ai.constant.EmbeddingSourceTypeEnum;
 import com.dodaso.ecosystem.ai.dto.AiSearchSyncDTO;
@@ -126,6 +127,8 @@ public class AiSyncService {
             embedding.setCreatedByUserId(effectiveUserId);
             embedding.setUpdatedByUserId(effectiveUserId);
             embedding.setSourceUpdatedAt(syncDto.getSourceUpdatedAt());
+            embedding.setAppCode(AppCodeEnum.ECWS.name());
+            embedding.setEmbeddingModel(ollamaService.getEmbeddingModel());
 
             embeddingRepository.saveAndFlush(embedding);
             // 3-1. Advisor's VectorStore
@@ -227,6 +230,8 @@ public class AiSyncService {
                 embedding.setCreatedByUserId(effectiveUserId);
                 embedding.setUpdatedByUserId(effectiveUserId);
                 embedding.setSourceUpdatedAt(chunk.getSourceUpdatedAt());
+                embedding.setAppCode(AppCodeEnum.ECWS.name());
+                embedding.setEmbeddingModel(ollamaService.getEmbeddingModel());
                 embeddings.add(embedding);
             }
 

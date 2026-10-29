@@ -304,6 +304,11 @@ public class AiFileSyncService {
     //     return chunks;
     // }
 
+    /** File text split the same way as ECWS files; also used for other apps' files. */
+    List<String> chunkFileText(String text) {
+        return chunkText(text, CHUNK_SIZE);
+    }
+
     /**
      * Splits text into chunks of at most {@code wordsPerChunk} words and at most
      * {@link #MAX_CHUNK_CHARS} characters. A single word longer than the character cap

@@ -20,6 +20,13 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
     @Transactional
     void deleteBySourceTypeAndSourceId(String sourceType, Long sourceId);
 
+    // Scoped apps (ELCM): rows of one app only
+    List<EcwsEmbedding> findByAppCodeAndSourceTypeAndSourceId(String appCode, String sourceType, Long sourceId);
+
+    @Modifying
+    @Transactional
+    long deleteByAppCodeAndSourceTypeAndSourceId(String appCode, String sourceType, Long sourceId);
+
     @Query("SELECT DISTINCT e.sourceId FROM EcwsEmbedding e WHERE e.sourceType IN :sourceTypes")
     List<Long> findDistinctSourceIdsBySourceTypeIn(@Param("sourceTypes") Collection<String> sourceTypes);
 
@@ -123,6 +130,49 @@ public interface EcwsEmbeddingRepository extends JpaRepository<EcwsEmbedding, Lo
         @Param("dueDateFrom") Date dueDateFrom,
         @Param("dueDateTo") Date dueDateTo,
         @Param("limit") int limit);
+
+    /**
+     * Search limited to one app and the scopes the caller may see (ELCM workspaces), and to
+     * vectors of the current model. Returns a projection, so new EcwsEmbedding columns don't
+     * have to be listed here.
+     */
+    @Query(value = """
+        SELECT id, source_type AS "sourceType", source_id AS "sourceId", chunk_index AS "chunkIndex",
+               chunk_text AS "chunkText", title, app_code AS "appCode", scope_id AS "scopeId",
+               owner_type AS "ownerType", owner_id AS "ownerId", parent_source_id AS "parentSourceId",
+               1 - (embedding <=> (:queryVector)::vector) AS score
+        FROM dodaso_embeddings
+        WHERE app_code = :appCode
+          AND scope_id IN (:scopeIds)
+          AND embedding_model = :embeddingModel
+          AND source_type IN (:sourceTypes)
+        ORDER BY embedding <=> (:queryVector)::vector
+        LIMIT :limit""", nativeQuery = true)
+    List<ScopedEmbeddingRow> findSimilarScoped(@Param("appCode") String appCode,
+        @Param("scopeIds") Collection<Long> scopeIds,
+        @Param("embeddingModel") String embeddingModel,
+        @Param("sourceTypes") Collection<String> sourceTypes,
+        @Param("queryVector") String queryVector,
+        @Param("limit") int limit);
+
+    /** As findSimilarScoped, every source type. */
+    @Query(value = """
+        SELECT id, source_type AS "sourceType", source_id AS "sourceId", chunk_index AS "chunkIndex",
+               chunk_text AS "chunkText", title, app_code AS "appCode", scope_id AS "scopeId",
+               owner_type AS "ownerType", owner_id AS "ownerId", parent_source_id AS "parentSourceId",
+               1 - (embedding <=> (:queryVector)::vector) AS score
+        FROM dodaso_embeddings
+        WHERE app_code = :appCode
+          AND scope_id IN (:scopeIds)
+          AND embedding_model = :embeddingModel
+        ORDER BY embedding <=> (:queryVector)::vector
+        LIMIT :limit""", nativeQuery = true)
+    List<ScopedEmbeddingRow> findSimilarScopedAllTypes(@Param("appCode") String appCode,
+        @Param("scopeIds") Collection<Long> scopeIds,
+        @Param("embeddingModel") String embeddingModel,
+        @Param("queryVector") String queryVector,
+        @Param("limit") int limit);
+
 //
 //    @Query(value = """
 //    SELECT *

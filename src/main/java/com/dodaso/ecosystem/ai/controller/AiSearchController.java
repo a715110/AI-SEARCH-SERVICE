@@ -1,10 +1,12 @@
 package com.dodaso.ecosystem.ai.controller;
 
 import com.dodaso.ecosystem.ai.container.AiGenerateDTOContainer;
+import com.dodaso.ecosystem.ai.container.AiIndexDTOContainer;
 import com.dodaso.ecosystem.ai.container.AiSearchSyncDTOContainer;
 import com.dodaso.ecosystem.ai.dto.AiGenerateDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.dto.AiSearchSyncDTO;
+import com.dodaso.ecosystem.ai.service.AiScopedSearchService;
 import com.dodaso.ecosystem.ai.service.AiSearchService;
 import com.dodaso.ecosystem.baseline.common.controller.RESTServiceController;
 import java.util.List;
@@ -26,6 +28,9 @@ public class AiSearchController extends RESTServiceController<AiSearchSyncDTOCon
     @Autowired
     private AiSearchService aiSearchService;
 
+    @Autowired
+    private AiScopedSearchService aiScopedSearchService;
+
 //    @PostMapping(value = "/sync", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
 //    public ResponseEntity<?> sync(@RequestBody AiSearchSyncDTOContainer requestBody) throws Exception {
 //        AiSearchSyncDTO syncDto = requestBody.getAiSearchSyncDTO();
@@ -45,6 +50,22 @@ public class AiSearchController extends RESTServiceController<AiSearchSyncDTOCon
             searchRequest.getSummary());
         responseContainer.setAiSearchResultDTOList(results);
         return new ResponseEntity<>(responseContainer, HttpStatus.OK);
+    }
+
+    /**
+     * Search limited to one app (ELCM) and the scopes the caller may see. 400 when appCode,
+     * query or a non-empty scopeIds list is missing.
+     */
+    @PostMapping(value = "/searchScoped", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<AiIndexDTOContainer> searchScoped(@RequestBody AiIndexDTOContainer requestBody) {
+        AiIndexDTOContainer response = new AiIndexDTOContainer();
+        try {
+            response.setAiSearchResultDTOList(aiScopedSearchService.search(requestBody.getAiScopedSearchDTO()));
+            return new ResponseEntity<>(response, HttpStatus.OK);
+        } catch (IllegalArgumentException e) {
+            response.setResultMessage(e.getMessage());
+            return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+        }
     }
 
 //     @PostMapping(value = "/refreshSync", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)

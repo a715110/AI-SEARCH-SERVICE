@@ -358,8 +358,10 @@ public class AiSyncService {
 
     @Transactional
     public void processPendingSyncs() {
-        List<EcwsEmbeddingSync> pendingList = syncRepository.findByStatusAndNextRetryAtBefore(
-            "FAILED", Instant.now());
+        // List<EcwsEmbeddingSync> pendingList = syncRepository.findByStatusAndNextRetryAtBefore(
+        //     "FAILED", Instant.now());
+        List<EcwsEmbeddingSync> pendingList = syncRepository.findByAppCodeAndStatusAndNextRetryAtBefore(
+            AppCodeEnum.ECWS.name(), "FAILED", Instant.now());
         if (pendingList.isEmpty())
             return;
 

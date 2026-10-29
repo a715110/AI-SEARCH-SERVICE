@@ -37,7 +37,24 @@ class EcwsEmbeddingRepositoryQueryTest {
             String sql = m.getAnnotation(Query.class).value();
             assertTrue(sql.contains("FROM dodaso_embeddings"), m.getName() + " must read dodaso_embeddings");
             assertFalse(sql.contains("ecws_embeddings"), m.getName() + " still names ecws_embeddings");
+            if (m.getName().contains("Scoped")) {
+                continue;
+            }
             assertTrue(sql.contains("app_code = 'ECWS'"), m.getName() + " must filter app_code = 'ECWS'");
+        }
+    }
+
+    /** ELCM searches: one app, the caller's scopes, and vectors of the current model only. */
+    @Test
+    void scopedQueriesFilterAppScopeAndModel() {
+        List<Method> scoped = nativeQueries().stream().filter(m -> m.getName().contains("Scoped")).toList();
+        assertTrue(scoped.size() == 2, "expected findSimilarScoped and findSimilarScopedAllTypes");
+        for (Method m : scoped) {
+            String sql = m.getAnnotation(Query.class).value();
+            assertTrue(sql.contains("app_code = :appCode"), m.getName());
+            assertTrue(sql.contains("scope_id IN (:scopeIds)"), m.getName());
+            assertTrue(sql.contains("embedding_model = :embeddingModel"), m.getName());
+            assertFalse(sql.contains(" OR "), m.getName() + " must not widen the filter with OR");
         }
     }
 

@@ -24,4 +24,14 @@ public interface EcwsEmbeddingSyncRepository extends JpaRepository<EcwsEmbedding
     List<Long> findDistinctSourceIdsBySourceTypeIn(@Param("sourceTypes") Collection<String> sourceTypes);
 
     List<EcwsEmbeddingSync> findByStatusAndNextRetryAtBefore(String status, Instant now);
+
+    // The retry job re-runs rows through the ECWS sync, so it reads only its own app's rows
+    List<EcwsEmbeddingSync> findByAppCodeAndStatusAndNextRetryAtBefore(String appCode, String status, Instant now);
+
+    // Scoped apps (ELCM)
+    Optional<EcwsEmbeddingSync> findByAppCodeAndSourceTypeAndSourceId(String appCode, String sourceType, Long sourceId);
+
+    @Modifying
+    @Transactional
+    long deleteByAppCodeAndSourceTypeAndSourceId(String appCode, String sourceType, Long sourceId);
 }

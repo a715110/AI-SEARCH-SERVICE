@@ -309,6 +309,7 @@ public class AiSyncService {
                             .sourceType(EmbeddingSourceTypeEnum.COLLABORATION_TASK.getSourceType())
                             .workspaceId(EmbeddingSourceTypeEnum.COLLABORATION_TASK.getWorkspaceId())
                             .summary(task.getSummary())
+                            .taskType(taskTypeName(task))
                             .status(task.getStatus())
                             .description(task.getDescription())
                             .priority(task.getPriority())
@@ -403,6 +404,7 @@ public class AiSyncService {
                 .sourceType(EmbeddingSourceTypeEnum.COLLABORATION_TASK.getSourceType())
                 .workspaceId(EmbeddingSourceTypeEnum.COLLABORATION_TASK.getWorkspaceId())
                 .summary(task.getSummary())
+                .taskType(taskTypeName(task))
                 .status(task.getStatus())
                 .description(task.getDescription())
                 .priority(task.getPriority())
@@ -701,6 +703,7 @@ public class AiSyncService {
                 "Content", dto.getDescription());
             default -> labeled(
                 "Summary", dto.getSummary(),
+                "Type", dto.getTaskType(),
                 "Status", dto.getStatus(),
                 "Priority", dto.getPriority(),
                 "Requestor", dto.getRequestor(),
@@ -708,6 +711,11 @@ public class AiSyncService {
                 "Scheduled", isoDate(dto.getScheduledDate()),
                 "Description", dto.getDescription());
         };
+    }
+
+    /** The task's type name, or null when ecws sent no type. */
+    static String taskTypeName(CollaborationTaskDTO task) {
+        return task.getTaskType() == null ? null : task.getTaskType().getTaskTypeMasterName();
     }
 
     /** "Label: value" pairs joined by " | ", leaving out pairs whose value is null or blank. */

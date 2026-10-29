@@ -62,6 +62,26 @@ class AiSyncContextTest {
     }
 
     @Test
+    void taskTypeFollowsSummary() {
+        assertEquals("Summary: Review package P-7 | Type: ELCM Review | Status: Assigned",
+            service.buildContext(AiSearchSyncDTO.builder()
+                .sourceType(EmbeddingSourceTypeEnum.COLLABORATION_TASK.getSourceType())
+                .summary("Review package P-7").taskType("ELCM Review").status("Assigned").build()));
+    }
+
+    @Test
+    void taskTypeNameIsNullWithoutAType() {
+        com.dodaso.ecosystem.ecws.dto.CollaborationTaskDTO task =
+            new com.dodaso.ecosystem.ecws.dto.CollaborationTaskDTO();
+        assertEquals(null, AiSyncService.taskTypeName(task));
+        com.dodaso.ecosystem.ecws.dto.TaskTypeMasterDTO type =
+            new com.dodaso.ecosystem.ecws.dto.TaskTypeMasterDTO();
+        type.setTaskTypeMasterName("ELCM Fix");
+        task.setTaskType(type);
+        assertEquals("ELCM Fix", AiSyncService.taskTypeName(task));
+    }
+
+    @Test
     void scheduledLabelOnlyWhenThereIsADate() {
         AiSearchSyncDTO.AiSearchSyncDTOBuilder b = AiSearchSyncDTO.builder()
             .sourceType(EmbeddingSourceTypeEnum.COLLABORATION_TASK.getSourceType()).summary("x");

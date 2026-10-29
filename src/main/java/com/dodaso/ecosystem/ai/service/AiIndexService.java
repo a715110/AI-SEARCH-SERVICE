@@ -127,17 +127,17 @@ public class AiIndexService {
         sync = syncRepository.save(sync);
 
         try {
-            List<String> chunks = textChunks(dto);
+            List<ClauseChunker.Chunk> chunks = textChunks(dto);
             if (chunks.isEmpty()) {
                 log.warn("No text in {} {} {} ({}); nothing indexed", appCode, sourceType, sourceId, dto.getFileName());
             }
             String model = ollamaService.getEmbeddingModel();
             List<EcwsEmbedding> rows = new ArrayList<>(chunks.size());
             for (int i = 0; i < chunks.size(); i++) {
-                String chunk = chunks.get(i);
-                // The title is embedded with every chunk but not stored in chunk_text, so a chunk
-                // is found by its document's name and shown without it.
-                String embedded = isBlank(dto.getTitle()) ? chunk : dto.getTitle() + " | " + chunk;
+                String chunk = chunks.get(i).text();
+                // Title and clause heading are embedded with every chunk but not stored in
+                // chunk_text, so a chunk is found by its document and clause and shown without them.
+                String embedded = header(dto.getTitle(), chunks.get(i).heading()) + chunk;
                 rows.add(row(dto, i, chunk, ollamaService.getOllamaEmbedding(embedded), model));
             }
             self.replaceRows(appCode, sourceType, sourceId, rows);
@@ -156,14 +156,38 @@ public class AiIndexService {
         }
     }
 
-    private List<String> textChunks(AiIndexDTO dto) throws Exception {
+    /**
+     * Contract files are split by clause; other text, and a file with no clause headings, the
+     * same way as ECWS files.
+     */
+    private List<ClauseChunker.Chunk> textChunks(AiIndexDTO dto) throws Exception {
         String text = dto.getFileBytes() != null && dto.getFileBytes().length > 0
             ? extractorService.extract(new ByteArrayInputStream(dto.getFileBytes()), dto.getFileName())
             : dto.getText();
         if (isBlank(text)) {
             return List.of();
         }
-        return aiFileSyncService.chunkFileText(text.trim());
+        if (ElcmSourceTypeEnum.STAGED_DOCUMENT.getSourceType().equals(dto.getSourceType())) {
+            List<ClauseChunker.Chunk> clauses = ClauseChunker.chunk(text);
+            if (!clauses.isEmpty()) {
+                return clauses;
+            }
+        }
+        return aiFileSyncService.chunkFileText(text.trim()).stream()
+            .map(c -> new ClauseChunker.Chunk(null, c))
+            .toList();
+    }
+
+    /** "Lease 123 Main St | Section 7 Rent | " (parts that are blank are left out). */
+    static String header(String title, String heading) {
+        StringBuilder h = new StringBuilder();
+        if (!isBlank(title)) {
+            h.append(title).append(" | ");
+        }
+        if (!isBlank(heading)) {
+            h.append(heading).append(" | ");
+        }
+        return h.toString();
     }
 
     private static EcwsEmbedding row(AiIndexDTO dto, int index, String chunk, float[] vector, String model) {

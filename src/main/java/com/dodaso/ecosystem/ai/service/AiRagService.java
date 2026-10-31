@@ -226,7 +226,13 @@ public class AiRagService {
     }
 
     /** An answer's chat text, and the file the user asked for (null when none). */
-    public record AiAnswer(String text, AiAnswerSpec.FileSpec file) {}
+    // public record AiAnswer(String text, AiAnswerSpec.FileSpec file) {}
+    public record AiAnswer(String text, AiAnswerSpec.FileSpec file, AiAnswerSpec.EditSpec edit) {
+
+        public AiAnswer(String text, AiAnswerSpec.FileSpec file) {
+            this(text, file, null);
+        }
+    }
 
     /**
      * Same as answer(question, sources, history, alerts, loginId, files), but the model may also
@@ -260,6 +266,25 @@ public class AiRagService {
         return parseAnswer(reply);
     }
 
+    // Changing wording in an attached Word file keeps its layout: the model lists find/replace
+    // pairs and AiDocxEditor applies them to the original file
+    private static final String EDIT_INSTRUCTIONS = """
+        When the user asks to change, fix, update or replace wording in an attached Word file \
+        (name ending in .docx), even if they ask for "a new Word file" or "the whole document", set \
+        "edit" instead of "file", so the new file keeps the original's layout. "sourceFileName" is \
+        the attached file's name exactly as listed; "fileName" is a short new name without \
+        extension. Each replacement's "find" is copied exactly, character for character, from that \
+        file's text, long enough to appear only where the change belongs (a phrase or sentence, not \
+        a single common word); "replace" is the new text. Every place that must change gets a \
+        replacement, including the same fact repeated elsewhere (for example a schedule or table \
+        that states the same number). A find must not span two paragraphs or two table cells; in \
+        the file's text a table row is one line with " | " between its cells, so a find in a \
+        table is the text of one cell and never contains " | ". \
+        Keep "answer" to 1-3 sentences listing what was changed. Files other than .docx (PDF, \
+        .doc, Excel, PowerPoint) can't be edited this way: say so, and make a new file only if \
+        the user wants one. A file that is only in the sources (found by search) can't be edited: \
+        tell the user to attach it with "Work with this file" next to it in the results.""";
+
     // private static final String FILE_OUTPUT_INSTRUCTIONS = """
     //     Reply as JSON with "answer" and "file". "answer" is your reply in the chat. Set "file" only \
     //     when the user asks for a file or document, such as a Word document or an Excel sheet (for \
@@ -283,7 +308,7 @@ public class AiRagService {
         attached files, and never invent rows that aren't there. Keep a table to at most 500 rows; \
         if there is more, say in the answer that the file has the first 500. "fileName" is a short \
         name without extension. You can't make other formats (PowerPoint, images); say so and set \
-        "file" to null.""";
+        "file" to null. "edit" is null unless the edit rules that follow apply.""" + " " + EDIT_INSTRUCTIONS;
 
     // A file's content is in the reply, so it can be much longer than a plain answer
     static final int FILE_ANSWER_MAX_TOKENS = 16000;
@@ -316,7 +341,8 @@ public class AiRagService {
                 log.warn("Answer JSON has no answer; showing the reply as text");
                 return new AiAnswer(reply, null);
             }
-            return new AiAnswer(spec.answer(), spec.file());
+            // return new AiAnswer(spec.answer(), spec.file());
+            return new AiAnswer(spec.answer(), spec.file(), spec.edit());
         } catch (Exception e) {
             log.warn("Answer is not valid JSON ({}); showing it as text without a file", e.getMessage());
             return new AiAnswer(reply, null);

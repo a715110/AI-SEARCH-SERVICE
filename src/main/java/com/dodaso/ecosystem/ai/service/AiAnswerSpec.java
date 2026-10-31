@@ -6,10 +6,26 @@ import java.util.List;
 /**
  * An answer as the model returns it when it may make a file: the chat reply, and a document spec
  * when the user asked for a Word, Excel, PDF or CSV file (null otherwise). Our code builds the file from the
- * spec (AiDocumentService); the model never returns file bytes.
+ * spec (AiDocumentService); the model never returns file bytes. edit is set instead of file when
+ * the user asks to change wording in an attached Word file (AiDocxEditor applies it).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record AiAnswerSpec(String answer, FileSpec file) {
+// public record AiAnswerSpec(String answer, FileSpec file) {
+public record AiAnswerSpec(String answer, FileSpec file, EditSpec edit) {
+
+    public AiAnswerSpec(String answer, FileSpec file) {
+        this(answer, file, null);
+    }
+
+    /**
+     * Changes to an attached .docx file: sourceFileName is the attached file, fileName the new
+     * file's name without extension, and each replacement's find is text copied from the file.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record EditSpec(String sourceFileName, String fileName, List<ReplacementSpec> replacements) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ReplacementSpec(String find, String replace) {}
 
     /** The file to make: DOCX, XLSX, PDF or CSV, its name without extension, a title and the content. */
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -34,11 +50,31 @@ public record AiAnswerSpec(String answer, FileSpec file) {
           "properties": {
             "answer": {"type": "string",
                        "description": "Your reply in the chat, in the language of the user's question, not of the sources."},
-            "file": {"anyOf": [{"$ref": "#/$defs/file"}, {"type": "null"}]}
+            "file": {"anyOf": [{"$ref": "#/$defs/file"}, {"type": "null"}]},
+            "edit": {"anyOf": [{"$ref": "#/$defs/edit"}, {"type": "null"}]}
           },
-          "required": ["answer", "file"],
+          "required": ["answer", "file", "edit"],
           "additionalProperties": false,
           "$defs": {
+            "edit": {
+              "type": "object",
+              "properties": {
+                "sourceFileName": {"type": "string"},
+                "fileName": {"type": "string"},
+                "replacements": {"type": "array", "items": {"$ref": "#/$defs/replacement"}}
+              },
+              "required": ["sourceFileName", "fileName", "replacements"],
+              "additionalProperties": false
+            },
+            "replacement": {
+              "type": "object",
+              "properties": {
+                "find": {"type": "string"},
+                "replace": {"type": "string"}
+              },
+              "required": ["find", "replace"],
+              "additionalProperties": false
+            },
             "file": {
               "type": "object",
               "properties": {

@@ -27,6 +27,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
@@ -209,6 +210,12 @@ private final ChatClient chatClient = null;
                 answer = answer + "\n\n" + FILE_FAILED;
             }
         }
+        if (reply.edit() != null && request.getLoginId() != null && !request.getLoginId().isBlank()) {
+            String note = applyEdit(reply.edit(), request.getFiles(), request.getLoginId(), generatedFiles);
+            if (note != null) {
+                answer = answer + "\n\n" + note;
+            }
+        }
         // log.info("Generated answer from {} source(s) in {} ms for project {}",
         //     sources.size(), System.currentTimeMillis() - start, request.getProjectId());
         // log.info("Generated answer from {} source(s) and {} alert(s) in {} ms for project {}",
@@ -242,6 +249,55 @@ private final ChatClient chatClient = null;
     }
 
     static final String FILE_FAILED = "The file couldn't be made; please ask again.";
+    static final String EDIT_NO_DOCX = "No file was made: only an attached Word (.docx) file can be"
+        + " changed with its layout kept.";
+    static final String EDIT_NOTHING_FOUND = "No file was made: none of the text to change was found"
+        + " in the file.";
+    static final String EDIT_NOT_FOUND = "Not found in the file, so not changed: ";
+
+    /**
+     * Applies an edit to the attached .docx it names (the only attached .docx when the name doesn't
+     * match) and saves the result into generatedFiles. Returns a note for the answer, or null.
+     */
+    String applyEdit(AiAnswerSpec.EditSpec edit, List<AiChatFileDTO> files, String loginId,
+        List<AiGeneratedFileDTO> generatedFiles) {
+        List<AiChatFileDTO> docxFiles = files == null ? List.of() : files.stream()
+            .filter(f -> f != null && f.getContent() != null && f.getFileName() != null
+                && f.getFileName().toLowerCase(Locale.ROOT).endsWith(".docx"))
+            .toList();
+        AiChatFileDTO source = docxFiles.stream()
+            .filter(f -> f.getFileName().equalsIgnoreCase(String.valueOf(edit.sourceFileName()).trim()))
+            .findFirst()
+            .orElse(docxFiles.size() == 1 ? docxFiles.get(0) : null);
+        if (source == null) {
+            return EDIT_NO_DOCX;
+        }
+        try {
+            AiDocxEditor.Result result = AiDocxEditor.apply(source.getContent(), edit.replacements());
+            if (result.total() == 0) {
+                return EDIT_NOTHING_FOUND;
+            }
+            AiDocumentService.Created created = aiDocumentService.saveEdited(result.bytes(),
+                edit.fileName(), source.getFileName(), edit, loginId);
+            if (created.file() != null) {
+                generatedFiles.add(created.file());
+            }
+            List<String> notes = new ArrayList<>();
+            if (created.note() != null) {
+                notes.add(created.note());
+            }
+            if (!result.notFound().isEmpty()) {
+                notes.add(EDIT_NOT_FOUND + result.notFound().stream()
+                    .map(find -> "\"" + find + "\"").collect(Collectors.joining(", ")));
+            }
+            log.info("Edited {}: {} replacement(s), {} find(s) not found", source.getFileName(),
+                result.total(), result.notFound().size());
+            return notes.isEmpty() ? null : String.join(" ", notes);
+        } catch (Exception e) {
+            log.error("Could not edit {}", source.getFileName(), e);
+            return FILE_FAILED;
+        }
+    }
 
     /**
      * The text of the files attached to a question. A file that can't be read (an image, an

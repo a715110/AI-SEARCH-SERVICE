@@ -5,6 +5,7 @@ import com.dodaso.ecosystem.ai.dto.AiSearchResultDTO;
 import com.dodaso.ecosystem.ai.entity.AiChatFile;
 import com.dodaso.ecosystem.ai.repository.AiChatFileRepository;
 import com.dodaso.ecosystem.ai.service.AiAnswerSpec.BlockSpec;
+import com.dodaso.ecosystem.ai.service.AiAnswerSpec.EditSpec;
 import com.dodaso.ecosystem.ai.service.AiAnswerSpec.FileSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
@@ -169,6 +170,35 @@ public class AiDocumentService {
         chatFileRepository.save(file);
         log.info("Saved generated {} file {} ({} bytes) for {}", format, file.getId(), bytes.length, loginId);
         return new Created(toDTO(file, false), notes.isEmpty() ? null : String.join(" ", notes));
+    }
+
+    /**
+     * Saves a Word file AiDocxEditor changed, for loginId for EXPIRY, and returns it without its
+     * bytes. name is the model's file name; blank uses the attached file's name plus "-edited".
+     * No file is saved over MAX_FILE_BYTES; the note says why.
+     */
+    public Created saveEdited(byte[] bytes, String name, String sourceFileName, EditSpec edit,
+        String loginId) throws IOException {
+        if (loginId == null || loginId.isBlank()) {
+            throw new IllegalArgumentException("A generated file needs an owner");
+        }
+        if (bytes.length > MAX_FILE_BYTES) {
+            return new Created(null, TOO_LARGE_NOTE);
+        }
+        String fallback = sourceFileName != null
+            ? sourceFileName.replaceAll("(?i)\\.docx$", "") + "-edited" : null;
+        AiChatFile file = new AiChatFile();
+        file.setId(UUID.randomUUID());
+        file.setOwnerLoginId(loginId.trim());
+        file.setFileName(fileName(name != null && !name.isBlank() ? name : fallback, DOCX, LocalDateTime.now()));
+        file.setContentType(DOCX_TYPE);
+        file.setSizeBytes((long) bytes.length);
+        file.setContent(bytes);
+        file.setSpec(MAPPER.writeValueAsString(edit));
+        file.setExpiresAt(Instant.now().plus(EXPIRY));
+        chatFileRepository.save(file);
+        log.info("Saved edited DOCX file {} ({} bytes) for {}", file.getId(), bytes.length, loginId);
+        return new Created(toDTO(file, false), null);
     }
 
     /** The file with its bytes, if it belongs to loginId, is active and hasn't expired. */

@@ -19,7 +19,12 @@ import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTextShape;
 
+import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
+import org.apache.poi.xwpf.usermodel.XWPFTableCell;
+import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -57,7 +62,21 @@ public class FileTextExtractorService {
     private String extractDocx(InputStream is) throws IOException {
         try (XWPFDocument doc = new XWPFDocument(is)) {
             StringJoiner sj = new StringJoiner("\n");
-            doc.getParagraphs().forEach(p -> sj.add(p.getText()));
+            // doc.getParagraphs().forEach(p -> sj.add(p.getText()));
+            // Paragraphs and tables in document order; a table row is one line, cells joined by " | "
+            for (IBodyElement element : doc.getBodyElements()) {
+                if (element instanceof XWPFParagraph p) {
+                    sj.add(p.getText());
+                } else if (element instanceof XWPFTable table) {
+                    for (XWPFTableRow row : table.getRows()) {
+                        StringJoiner rowJoiner = new StringJoiner(" | ");
+                        for (XWPFTableCell cell : row.getTableCells()) {
+                            rowJoiner.add(cell.getTextRecursively().replaceAll("\\s+", " ").trim());
+                        }
+                        sj.add(rowJoiner.toString());
+                    }
+                }
+            }
             return sj.toString();
         }
     }

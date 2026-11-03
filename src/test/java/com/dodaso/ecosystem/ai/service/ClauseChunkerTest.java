@@ -86,6 +86,24 @@ class ClauseChunkerTest {
     }
 
     @Test
+    void smallerCapCutsAndMergesAtThatSize() {
+        String text = "1. Term\nThe term is five years.\n"
+            + "2. Rent\nRent is $4,000 per month.\n"
+            + "Section 9 Maintenance\n" + sentences("Maintenance", 40);
+
+        List<ClauseChunker.Chunk> chunks = ClauseChunker.chunk(text, 800);
+
+        assertEquals("1. Term", chunks.get(0).heading());
+        assertTrue(chunks.get(0).text().contains("2. Rent"), "small clauses still merge");
+        assertTrue(chunks.size() > 2, "the long clause is cut into several pieces");
+        for (ClauseChunker.Chunk c : chunks) {
+            assertTrue(c.text().length() <= 800, "chunk over the cap: " + c.text().length());
+        }
+        assertEquals(List.of(800, 800, 400),
+            ClauseChunker.cutLong("_".repeat(2000), 800).stream().map(String::length).toList());
+    }
+
+    @Test
     void koreanArticlesAreSplit() {
         String text = JE + "1" + JO + "\n" + sentences("a", 35) + "\n"
             + JE + "2" + JO + "(" + RENT_KO + ")\n" + sentences("b", 35);

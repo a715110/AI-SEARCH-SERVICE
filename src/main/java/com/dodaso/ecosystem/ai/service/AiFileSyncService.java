@@ -43,6 +43,14 @@ public class AiFileSyncService {
      */
     private static final int MAX_CHUNK_CHARS = 1800;
 
+    /**
+     * Characters per clause chunk for ECWS files with clause headings (contracts). In a retrieval
+     * test on local data, clause chunks of about 800 chars found answers that 1800-char windows
+     * missed: a clause cut mid-sentence away from its title, a rent table split from its header,
+     * or one sentence diluted by several other clauses in the same chunk.
+     */
+    static final int CLAUSE_MAX_CHARS = 800;
+
     private static final List<String> FILE_SOURCE_TYPES = List.of(
         EmbeddingSourceTypeEnum.TASK_FILE_ATTACHMENT.getSourceType(),
         EmbeddingSourceTypeEnum.COMMENT_FILE_ATTACHMENT.getSourceType());
@@ -57,7 +65,8 @@ public class AiFileSyncService {
     public void syncFileAsync(FileAttachmentDTO attachment, InputStream inputStream) {
         try {
             String rawText = extractorService.extract(inputStream, attachment.getFileName());
-            List<String> chunks = chunkText(rawText, CHUNK_SIZE);
+            // List<String> chunks = chunkText(rawText, CHUNK_SIZE);
+            List<String> chunks = chunkEcwsFileText(rawText);
 
             log.info("Syncing file '{}' — {} chunks", attachment.getFileName(), chunks.size());
 
@@ -304,7 +313,29 @@ public class AiFileSyncService {
     //     return chunks;
     // }
 
-    /** File text split the same way as ECWS files; also used for other apps' files. */
+    /**
+     * ECWS file text split by clause when it has clause headings, otherwise by
+     * {@link #chunkText}. A piece cut from a long clause does not contain the clause title, so
+     * the title is put in front of it.
+     */
+    List<String> chunkEcwsFileText(String text) {
+        List<ClauseChunker.Chunk> clauses = ClauseChunker.chunk(text, CLAUSE_MAX_CHARS);
+        if (clauses.isEmpty()) {
+            return chunkText(text, CHUNK_SIZE);
+        }
+        return clauses.stream()
+            .map(c -> c.heading() == null || flat(c.text()).contains(c.heading())
+                ? c.text()
+                : c.heading() + "\n" + c.text())
+            .toList();
+    }
+
+    private static String flat(String text) {
+        return text.replaceAll("\\s+", " ");
+    }
+
+    // /** File text split the same way as ECWS files; also used for other apps' files. */
+    /** Plain chunking, as ECWS files without clause headings; also used for other apps' files. */
     List<String> chunkFileText(String text) {
         return chunkText(text, CHUNK_SIZE);
     }

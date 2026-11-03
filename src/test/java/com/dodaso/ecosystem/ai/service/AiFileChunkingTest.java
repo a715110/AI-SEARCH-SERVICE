@@ -190,4 +190,38 @@ class AiFileChunkingTest {
     void shortFileIsOneChunk() throws Exception {
         assertEquals(1, chunksSentFor(words(10), taskFile()).size());
     }
+
+    private static String sentences(String word, int count) {
+        return IntStream.range(0, count).mapToObj(i -> word + " sentence " + i + " ends here.")
+            .collect(Collectors.joining(" "));
+    }
+
+    @Test
+    void contractFileIsSplitByClauseAndCutPiecesKeepTheClauseTitle() throws Exception {
+        String text = "OFFICE LEASE\n"
+            + "24. Insurance\n" + sentences("Insurance", 5) + "\n"
+            + "25. Holding Over\n" + sentences("Holdover", 40) + "\n"
+            + "26. Notices\n" + sentences("Notice", 5) + "\n";
+
+        List<AiSearchSyncDTO> chunks = chunksSentFor(text, taskFile());
+
+        List<String> holdover = chunks.stream().map(AiSearchSyncDTO::getDescription)
+            .filter(d -> d.contains("Holdover sentence")).toList();
+        assertTrue(holdover.size() > 1, "the long clause is cut");
+        assertTrue(holdover.stream().allMatch(d -> d.startsWith("25. Holding Over\n")),
+            "every piece starts with the clause title");
+        assertTrue(chunks.stream().noneMatch(c -> c.getDescription().contains("Holdover sentence")
+            && c.getDescription().contains("Notices")), "clauses are not cut mid-way into the next one");
+        assertTrue(chunks.stream().allMatch(c -> c.getDescription().length()
+            <= AiFileSyncService.CLAUSE_MAX_CHARS + "25. Holding Over\n".length()));
+        assertEquals("long.txt [chunk 1/" + chunks.size() + "]", chunks.get(0).getSummary());
+    }
+
+    @Test
+    void fileWithoutClauseHeadingsKeepsPlainChunking() throws Exception {
+        AiFileSyncService service = new AiFileSyncService(null, null, null, null, null);
+        String text = sentences("Plain", 200);
+
+        assertEquals(service.chunkText(text, 500), service.chunkEcwsFileText(text));
+    }
 }

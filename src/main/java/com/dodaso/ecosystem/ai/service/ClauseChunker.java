@@ -12,9 +12,9 @@ import java.util.regex.Pattern;
  *   <li>a numbered heading such as {@code 7. Rent} or {@code 7.2 Late charges};</li>
  *   <li>the Korean article heading (je n jo), matched from code points.</li>
  * </ul>
- * Small neighbouring clauses are merged up to {@link #MAX_CHARS}; a clause longer than that is cut
- * at a sentence end near the cap when there is one. Text with no headings returns an empty list,
- * so the caller can fall back to plain chunking.
+ * Small neighbouring clauses are merged up to {@link #MAX_CHARS} (or the cap the caller passes); a
+ * clause longer than that is cut at a sentence end near the cap when there is one. Text with no
+ * headings returns an empty list, so the caller can fall back to plain chunking.
  */
 final class ClauseChunker {
 
@@ -50,6 +50,11 @@ final class ClauseChunker {
     }
 
     static List<Chunk> chunk(String text) {
+        return chunk(text, MAX_CHARS);
+    }
+
+    /** Same as {@link #chunk(String)} with a smaller cap than MAX_CHARS. */
+    static List<Chunk> chunk(String text, int maxChars) {
         List<Chunk> clauses = splitClauses(text);
         if (clauses.stream().noneMatch(c -> c.heading() != null)) {
             return List.of();
@@ -57,17 +62,20 @@ final class ClauseChunker {
         List<Chunk> chunks = new ArrayList<>();
         Chunk pending = null;
         for (Chunk clause : clauses) {
-            if (clause.text().length() > MAX_CHARS) {
+            // if (clause.text().length() > MAX_CHARS) {
+            if (clause.text().length() > maxChars) {
                 if (pending != null) {
                     chunks.add(pending);
                     pending = null;
                 }
-                for (String piece : cutLong(clause.text())) {
+                // for (String piece : cutLong(clause.text())) {
+                for (String piece : cutLong(clause.text(), maxChars)) {
                     chunks.add(new Chunk(clause.heading(), piece));
                 }
             } else if (pending == null) {
                 pending = clause;
-            } else if (pending.text().length() + 2 + clause.text().length() <= MAX_CHARS) {
+            // } else if (pending.text().length() + 2 + clause.text().length() <= MAX_CHARS) {
+            } else if (pending.text().length() + 2 + clause.text().length() <= maxChars) {
                 pending = new Chunk(pending.heading() != null ? pending.heading() : clause.heading(),
                     pending.text() + "\n\n" + clause.text());
             } else {
@@ -119,15 +127,23 @@ final class ClauseChunker {
      * line break) within SENTENCE_LOOKBACK of the cap, else at the last space, else at the cap.
      */
     static List<String> cutLong(String text) {
+        return cutLong(text, MAX_CHARS);
+    }
+
+    static List<String> cutLong(String text, int maxChars) {
         List<String> pieces = new ArrayList<>();
         String rest = text.strip();
-        while (rest.length() > MAX_CHARS) {
-            int cut = sentenceEnd(rest);
+        // while (rest.length() > MAX_CHARS) {
+        while (rest.length() > maxChars) {
+            // int cut = sentenceEnd(rest);
+            int cut = sentenceEnd(rest, maxChars);
             if (cut <= 0) {
-                cut = rest.lastIndexOf(' ', MAX_CHARS);
+                // cut = rest.lastIndexOf(' ', MAX_CHARS);
+                cut = rest.lastIndexOf(' ', maxChars);
             }
             if (cut <= 0) {
-                cut = MAX_CHARS;
+                // cut = MAX_CHARS;
+                cut = maxChars;
             }
             pieces.add(rest.substring(0, cut).strip());
             rest = rest.substring(cut).strip();
@@ -138,8 +154,10 @@ final class ClauseChunker {
         return pieces;
     }
 
-    private static int sentenceEnd(String text) {
-        for (int i = MAX_CHARS - 1; i >= MAX_CHARS - SENTENCE_LOOKBACK; i--) {
+    // private static int sentenceEnd(String text) {
+    //     for (int i = MAX_CHARS - 1; i >= MAX_CHARS - SENTENCE_LOOKBACK; i--) {
+    private static int sentenceEnd(String text, int maxChars) {
+        for (int i = maxChars - 1; i >= maxChars - SENTENCE_LOOKBACK; i--) {
             char c = text.charAt(i);
             if (c == '\n') {
                 return i + 1;

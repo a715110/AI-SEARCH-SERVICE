@@ -22,6 +22,10 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>Without an API key the service still starts (search doesn't need it); answers then fail
  * with a message saying the key is missing.
+ *
+ * <p>{@code spring.ai.openai.base-url} can point at any OpenAI-compatible server (Ollama, vLLM,
+ * llama.cpp) to keep answers inside the instance. Those servers ignore the key, but it must
+ * still be non-blank.
  */
 @Slf4j
 @Configuration
@@ -30,6 +34,7 @@ public class OpenAiConfig {
   @Bean(defaultCandidate = false)
   public ChatClient openAiChatClient(
       @Value("${spring.ai.openai.api-key:}") String apiKey,
+      @Value("${spring.ai.openai.base-url:https://api.openai.com}") String baseUrl,
       @Value("${spring.ai.openai.chat.options.model}") String model,
       @Value("${spring.ai.openai.chat.options.reasoning-effort}") String reasoningEffort,
       @Value("${spring.ai.openai.chat.options.max-completion-tokens}") int maxCompletionTokens) {
@@ -41,7 +46,8 @@ public class OpenAiConfig {
       };
     } else {
       chatModel = OpenAiChatModel.builder()
-          .openAiApi(OpenAiApi.builder().apiKey(apiKey).build())
+          // .openAiApi(OpenAiApi.builder().apiKey(apiKey).build())
+          .openAiApi(OpenAiApi.builder().baseUrl(baseUrl).apiKey(apiKey).build())
           .defaultOptions(OpenAiChatOptions.builder()
               .model(model)
               .reasoningEffort(reasoningEffort)

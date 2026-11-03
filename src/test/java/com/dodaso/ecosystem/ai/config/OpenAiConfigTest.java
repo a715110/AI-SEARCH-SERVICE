@@ -10,6 +10,10 @@ import static org.mockito.Mockito.mock;
 import com.dodaso.ecosystem.ai.repository.EcwsEmbeddingRepository;
 import com.dodaso.ecosystem.ai.service.AiRagService;
 import com.dodaso.ecosystem.ai.service.OllamaService;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -55,5 +59,33 @@ class OpenAiConfigTest {
                 () -> openAi.prompt().user("hi").call().content());
             assertEquals("OpenAI API key is not set (OPENAI_API_KEY / ai-openai-api-key)", e.getMessage());
         });
+    }
+
+    @Test
+    void baseUrlSendsAnswersToThatServer() throws Exception {
+        AtomicReference<String> path = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            path.set(exchange.getRequestURI().getPath());
+            byte[] body = ("{\"id\":\"1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"qwen3:8b\","
+                + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"local answer\"},"
+                + "\"finish_reason\":\"stop\"}]}").getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            runner.withPropertyValues(
+                "spring.ai.openai.api-key=unused",
+                "spring.ai.openai.base-url=http://127.0.0.1:" + server.getAddress().getPort()).run(context -> {
+                ChatClient openAi = context.getBean("openAiChatClient", ChatClient.class);
+                assertEquals("local answer", openAi.prompt().user("hi").call().content());
+                assertEquals("/v1/chat/completions", path.get());
+            });
+        } finally {
+            server.stop(0);
+        }
     }
 }

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
@@ -18,7 +19,10 @@ import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
+import org.apache.xmlbeans.XmlCursor;
+import org.apache.xmlbeans.XmlObject;
 import org.apache.xmlbeans.impl.xb.xmlschema.SpaceAttribute;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTBr;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTText;
 
 /**
@@ -125,13 +129,149 @@ public final class AiDocxEditor {
         }
     }
 
+    // A run's text (w:t) or a tab or line break in it, at its position in the paragraph's text
+    private record Piece(XmlObject element, CTText text, int start, int length) {
+    }
+
     /**
      * Replaces every occurrence of find in the paragraph; returns how many. The paragraph's text is
-     * the w:t elements of its runs in order (tabs and breaks aren't text, so a find can't cross
-     * them). The first w:t of a match gets the text before it plus the replacement, the w:t
-     * elements inside it become empty, and the last keeps the text after it.
+     * its runs' w:t elements in order, with a tab or line break (w:tab, w:br, w:cr) as one blank;
+     * any blanks in find match any blanks there, so "TENANT: Name" matches "TENANT:" and "Name" on
+     * two lines. Words that find and replace share at their start and end stay as they are; only
+     * the words between change, so a label in its own run keeps its formatting and its line break.
+     * The first w:t of the changed part gets the text before it plus the replacement, the w:t
+     * elements inside it become empty, tabs and breaks inside it are removed, and the last w:t
+     * keeps the text after it.
      */
     static int replaceIn(XWPFParagraph paragraph, String find, String replace) {
+        String normalizedFind = normalize(find);
+        String[] findWords = words(normalizedFind);
+        if (findWords.length == 0) {
+            return replaceInText(paragraph, find, replace);
+        }
+        StringBuilder regex = new StringBuilder(normalizedFind.matches("^\\s.*") ? "\\s+" : "");
+        for (int i = 0; i < findWords.length; i++) {
+            regex.append(i > 0 ? "\\s+" : "").append('(').append(Pattern.quote(findWords[i])).append(')');
+        }
+        regex.append(normalizedFind.matches(".*\\s$") ? "\\s+" : "");
+        Pattern pattern = Pattern.compile(regex.toString(), Pattern.DOTALL);
+
+        // Shared words at the start (same) and end (shared) of find and replace
+        String[] rawFindWords = words(find);
+        List<int[]> replaceWords = wordSpans(replace);
+        int most = Math.min(rawFindWords.length, replaceWords.size());
+        int same = 0;
+        while (same < most && rawFindWords[same].equals(wordAt(replace, replaceWords, same))) {
+            same++;
+        }
+        int shared = 0;
+        while (same + shared < most && rawFindWords[rawFindWords.length - 1 - shared]
+            .equals(wordAt(replace, replaceWords, replaceWords.size() - 1 - shared))) {
+            shared++;
+        }
+        if (same + shared >= rawFindWords.length || same + shared >= replaceWords.size()) {
+            same = 0;
+            shared = 0;
+        }
+        String middle = replace.substring(same == 0 ? 0 : replaceWords.get(same)[0],
+            shared == 0 ? replace.length() : replaceWords.get(replaceWords.size() - 1 - shared)[1]);
+
+        int count = 0;
+        int from = 0;
+        while (true) {
+            List<Piece> pieces = pieces(paragraph);
+            StringBuilder all = new StringBuilder();
+            for (Piece piece : pieces) {
+                all.append(piece.text() != null ? value(piece.text()) : piece.element() instanceof CTBr ? "\n" : "\t");
+            }
+            Matcher matcher = pattern.matcher(normalize(all.toString()));
+            if (from > all.length() || !matcher.find(from)) {
+                return count;
+            }
+            int start = same == 0 ? matcher.start() : matcher.start(same + 1);
+            int end = shared == 0 ? matcher.end() : matcher.end(findWords.length - shared);
+            replaceRange(pieces, start, end, middle);
+            count++;
+            from = start + middle.length();
+        }
+    }
+
+    private static String[] words(String text) {
+        String trimmed = text.strip();
+        return trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
+    }
+
+    // Start and end of each word in text
+    private static List<int[]> wordSpans(String text) {
+        List<int[]> spans = new ArrayList<>();
+        Matcher matcher = Pattern.compile("\\S+").matcher(text);
+        while (matcher.find()) {
+            spans.add(new int[] {matcher.start(), matcher.end()});
+        }
+        return spans;
+    }
+
+    private static String wordAt(String text, List<int[]> spans, int index) {
+        return text.substring(spans.get(index)[0], spans.get(index)[1]);
+    }
+
+    /** The paragraph's w:t, w:tab, w:br and w:cr elements in order, with their positions. */
+    private static List<Piece> pieces(XWPFParagraph paragraph) {
+        List<Piece> pieces = new ArrayList<>();
+        int position = 0;
+        for (XWPFRun run : paragraph.getRuns()) {
+            try (XmlCursor cursor = run.getCTR().newCursor()) {
+                for (boolean more = cursor.toFirstChild(); more; more = cursor.toNextSibling()) {
+                    XmlObject element = cursor.getObject();
+                    if (element instanceof CTText text) {
+                        pieces.add(new Piece(element, text, position, value(text).length()));
+                        position += value(text).length();
+                    } else if (element instanceof CTBr || "tab".equals(cursor.getName().getLocalPart())
+                        || "cr".equals(cursor.getName().getLocalPart())) {
+                        pieces.add(new Piece(element, null, position, 1));
+                        position++;
+                    }
+                }
+            }
+        }
+        return pieces;
+    }
+
+    /** Puts replace in place of the paragraph's text from start to end. */
+    private static void replaceRange(List<Piece> pieces, int start, int end, String replace) {
+        List<Piece> inside = pieces.stream()
+            .filter(p -> p.start() < end && start < p.start() + p.length())
+            .toList();
+        List<Piece> texts = inside.stream().filter(p -> p.text() != null).toList();
+        if (texts.isEmpty()) {
+            return;
+        }
+        Piece first = texts.get(0);
+        Piece last = texts.get(texts.size() - 1);
+        String firstValue = value(first.text());
+        String lastValue = value(last.text());
+        String before = firstValue.substring(0, Math.max(0, start - first.start()));
+        String after = lastValue.substring(Math.min(lastValue.length(), end - last.start()));
+        if (first == last) {
+            setValue(first.text(), before + replace + after);
+        } else {
+            setValue(first.text(), before + replace);
+            for (Piece piece : texts.subList(1, texts.size() - 1)) {
+                setValue(piece.text(), "");
+            }
+            setValue(last.text(), after);
+        }
+        for (Piece piece : inside) {
+            if (piece.text() == null) {
+                try (XmlCursor cursor = piece.element().newCursor()) {
+                    cursor.removeXml();
+                }
+            }
+        }
+    }
+
+    /** The earlier replaceIn, now used only for a find that is all blanks. */
+    static int replaceInText(XWPFParagraph paragraph, String find, String replace) {
         String normalizedFind = normalize(find);
         int count = 0;
         int from = 0;

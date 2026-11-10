@@ -121,7 +121,9 @@ class AiDocxEditorTest {
 
         assertEquals(1, result.total());
         try (XWPFDocument doc = open(result.bytes())) {
-            assertEquals("this \"Lease\" is entered into", doc.getParagraphs().get(1).getText());
+            // assertEquals("this \"Lease\" is entered into", doc.getParagraphs().get(1).getText());
+            // Only the words that changed are written, so the file's curly quotes stay
+            assertEquals("this “Lease” is entered into", doc.getParagraphs().get(1).getText());
         }
     }
 
@@ -142,6 +144,52 @@ class AiDocxEditorTest {
             List.of(new ReplacementSpec("calendar months", "calendar months and days")));
 
         assertEquals(1, result.total());
+    }
+
+    /** A signature block: bold "TENANT:", a line break, then the name in a plain run. */
+    private static byte[] signature() throws Exception {
+        try (XWPFDocument doc = new XWPFDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            XWPFParagraph p = doc.createTable(1, 1).getRow(0).getCell(0).getParagraphs().get(0);
+            XWPFRun label = p.createRun();
+            label.setBold(true);
+            label.setText("TENANT:");
+            label.addBreak();
+            XWPFRun name = p.createRun();
+            name.setText("Coldline Logistics Corp.");
+            name.addBreak();
+            p.createRun().setText("By: /s/ Jennifer W. Stroud");
+            doc.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
+    void findWithASpaceMatchesALineBreakAndKeepsIt() throws Exception {
+        AiDocxEditor.Result result = AiDocxEditor.apply(signature(),
+            List.of(new ReplacementSpec("TENANT: Coldline Logistics Corp.", "TENANT: Hyoungchul Choi")));
+
+        assertEquals(1, result.total());
+        try (XWPFDocument doc = open(result.bytes())) {
+            XWPFParagraph p = doc.getTables().get(0).getRow(0).getCell(0).getParagraphs().get(0);
+            assertEquals("TENANT:\nHyoungchul Choi\nBy: /s/ Jennifer W. Stroud", p.getText());
+            // The label stays bold on its own line; the name keeps its plain run
+            assertEquals("TENANT:", p.getRuns().get(0).text().strip());
+            assertTrue(p.getRuns().get(0).isBold());
+            assertEquals(false, p.getRuns().get(1).isBold());
+        }
+    }
+
+    @Test
+    void sharedWordsStayAndOnlyTheMiddleChanges() throws Exception {
+        AiDocxEditor.Result result = AiDocxEditor.apply(lease(),
+            List.of(new ReplacementSpec("for the first three (3) full", "for the first six (6) full")));
+
+        try (XWPFDocument doc = open(result.bytes())) {
+            // "six (6)" goes into the bold run that held "three (3)"
+            XWPFRun bold = doc.getParagraphs().get(0).getRuns().get(1);
+            assertEquals("six (6)", bold.text());
+            assertTrue(bold.isBold());
+        }
     }
 
     // ---- AiSearchService.applyEdit ----

@@ -1,5 +1,6 @@
 package com.dodaso.ecosystem.ai.service;
 
+import com.dodaso.ecosystem.ai.dto.AiCatchUpActionDTO;
 import com.dodaso.ecosystem.ai.dto.AiCatchUpDTO;
 import com.dodaso.ecosystem.ai.dto.AiCatchUpItemDTO;
 import com.dodaso.ecosystem.ai.dto.AiCatchUpPointDTO;
@@ -57,11 +58,18 @@ public class AiCatchUpService {
     List<List<AiCatchUpItemDTO>> chunks = CatchUpLogic.chunk(items, chunkChars);
     List<AiCatchUpPointDTO> collected = new ArrayList<>();
     int dropped = 0;
+    boolean wantActions = request.isWantActions();
+    List<AiCatchUpActionDTO> actions = new ArrayList<>();
+    int droppedActions = 0;
     for (List<AiCatchUpItemDTO> chunk : chunks) {
-      String reply = ask(CatchUpLogic.buildPrompt(request.getTaskContext(), request.getSince(), chunk));
-      CatchUpLogic.Parsed parsed = CatchUpLogic.parse(reply, validRefs);
+      String reply = ask(CatchUpLogic.buildPrompt(request.getTaskContext(), request.getSince(), chunk,
+          wantActions, request.getCandidateOwners(), request.getExistingSubTasks()));
+      CatchUpLogic.Parsed parsed = CatchUpLogic.parse(reply, validRefs,
+          wantActions ? request.getCandidateOwners() : null);
       collected.addAll(parsed.points());
       dropped += parsed.dropped();
+      actions.addAll(parsed.actions());
+      droppedActions += parsed.droppedActions();
     }
     if (chunks.size() > 1 && collected.size() > CatchUpLogic.MAX_POINTS) {
       String reply = ask(CatchUpLogic.buildMergePrompt(request.getTaskContext(), collected));
@@ -76,8 +84,13 @@ public class AiCatchUpService {
     }
     response.setPoints(collected);
     response.setDroppedPoints(dropped);
-    log.info("Catch-up: {} item(s) in {} chunk(s), {} point(s), {} dropped, {} ms",
-        items.size(), chunks.size(), collected.size(), dropped, System.currentTimeMillis() - start);
+    if (wantActions) {
+      response.setActions(CatchUpLogic.mergeActions(actions, request.getExistingSubTasks()));
+      response.setDroppedActions(droppedActions);
+    }
+    log.info("Catch-up: {} item(s) in {} chunk(s), {} point(s), {} dropped, {} action(s), {} ms",
+        items.size(), chunks.size(), collected.size(), dropped, response.getActions().size(),
+        System.currentTimeMillis() - start);
     return response;
   }
 

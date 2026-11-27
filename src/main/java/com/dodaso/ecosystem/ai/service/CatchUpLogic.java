@@ -1,13 +1,20 @@
 package com.dodaso.ecosystem.ai.service;
 
+import com.dodaso.ecosystem.ai.dto.AiCatchUpActionDTO;
 import com.dodaso.ecosystem.ai.dto.AiCatchUpItemDTO;
+import com.dodaso.ecosystem.ai.dto.AiCatchUpPersonDTO;
 import com.dodaso.ecosystem.ai.dto.AiCatchUpPointDTO;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -23,6 +30,10 @@ public final class CatchUpLogic {
   public static final int MAX_POINTS = 8;
   /** Longest statement kept. */
   public static final int MAX_POINT_CHARS = 400;
+  /** ADDED 2026-11-27: most action items kept. */
+  public static final int MAX_ACTIONS = 8;
+  /** ADDED 2026-11-27: longest action title kept. */
+  public static final int MAX_ACTION_CHARS = 120;
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -30,7 +41,12 @@ public final class CatchUpLogic {
   }
 
   /** The result of reading a model answer. */
-  public record Parsed(List<AiCatchUpPointDTO> points, int dropped) {
+  public record Parsed(List<AiCatchUpPointDTO> points, int dropped,
+      List<AiCatchUpActionDTO> actions, int droppedActions) {
+
+    public Parsed(List<AiCatchUpPointDTO> points, int dropped) {
+      this(points, dropped, new ArrayList<>(), 0);
+    }
   }
 
   /** Items in order, in chunks whose text totals at most maxChars (an item is never split). */
@@ -54,8 +70,18 @@ public final class CatchUpLogic {
     return chunks;
   }
 
-  /** The prompt for one chunk of items. */
+  /** The prompt for one chunk of items, summary only. */
   public static String buildPrompt(String taskContext, Instant since, List<AiCatchUpItemDTO> chunk) {
+    return buildPrompt(taskContext, since, chunk, false, null, null);
+  }
+
+  /**
+   * The prompt for one chunk of items. With wantActions the model is also asked for action items:
+   * things the items say someone still has to do. people are the only names it may give as owner;
+   * existing are sub-task titles it must not repeat.
+   */
+  public static String buildPrompt(String taskContext, Instant since, List<AiCatchUpItemDTO> chunk,
+      boolean wantActions, List<AiCatchUpPersonDTO> people, List<String> existing) {
     StringBuilder sb = new StringBuilder();
     sb.append("You help a person catch up on a work task. Summarize only what the items below say.\n");
     sb.append("Rules:\n");
@@ -65,10 +91,40 @@ public final class CatchUpLogic {
     sb.append("due date or approvals. Skip small talk.\n");
     sb.append("- Write at most ").append(MAX_POINTS).append(" statements, each one sentence, plain language.\n");
     sb.append("- Every statement must list the refs of the items it comes from, for example [\"C12\",\"E40\"].\n");
+    if (wantActions) {
+      sb.append("- Also list action items: things the items say someone still has to do and that no ");
+      sb.append("later item reports as done. At most ").append(MAX_ACTIONS).append(", each a short ");
+      sb.append("imperative title of at most ").append(MAX_ACTION_CHARS).append(" characters.\n");
+      sb.append("- An action item lists the refs it comes from. ownerLogin is a login from the People ");
+      sb.append("list below, only when the items clearly give the work to that person; otherwise null. ");
+      sb.append("dueDate is yyyy-MM-dd, only when an item states a specific date; otherwise null.\n");
+      sb.append("- Do not list an action that matches an existing sub-task.\n");
+    }
     sb.append("- Answer with JSON only, in this shape: ");
-    sb.append("{\"points\":[{\"text\":\"...\",\"refs\":[\"C12\"]}]}\n\n");
+    if (wantActions) {
+      sb.append("{\"points\":[{\"text\":\"...\",\"refs\":[\"C12\"]}],");
+      sb.append("\"actions\":[{\"title\":\"...\",\"ownerLogin\":null,\"dueDate\":null,");
+      sb.append("\"refs\":[\"C12\"]}]}\n\n");
+    } else {
+      sb.append("{\"points\":[{\"text\":\"...\",\"refs\":[\"C12\"]}]}\n\n");
+    }
     if (taskContext != null && !taskContext.isBlank()) {
       sb.append("Task:\n").append(taskContext.trim()).append("\n\n");
+    }
+    if (wantActions && people != null && !people.isEmpty()) {
+      sb.append("People (login: name):\n");
+      for (AiCatchUpPersonDTO person : people) {
+        sb.append("- ").append(person.getLogin()).append(": ")
+            .append(person.getName() == null ? "" : person.getName()).append('\n');
+      }
+      sb.append('\n');
+    }
+    if (wantActions && existing != null && !existing.isEmpty()) {
+      sb.append("Existing sub-tasks:\n");
+      for (String title : existing) {
+        sb.append("- ").append(trim(title == null ? "" : title, MAX_ACTION_CHARS)).append('\n');
+      }
+      sb.append('\n');
     }
     sb.append(since == null ? "Items (whole thread, oldest first):\n"
         : "Items since " + since + " (oldest first):\n");
@@ -104,6 +160,17 @@ public final class CatchUpLogic {
    * Unreadable output gives no points and dropped 0.
    */
   public static Parsed parse(String modelText, Set<String> validRefs) {
+    return parse(modelText, validRefs, null);
+  }
+
+  /**
+   * As parse(modelText, validRefs), and when people is not null also the "actions" of the answer.
+   * An action needs a title and at least one valid ref or it is dropped and counted. An owner that
+   * is not one of the people is set to null (the action stays); so is a due date that is not a
+   * real yyyy-MM-dd date.
+   */
+  public static Parsed parse(String modelText, Set<String> validRefs,
+      List<AiCatchUpPersonDTO> people) {
     List<AiCatchUpPointDTO> points = new ArrayList<>();
     int dropped = 0;
     if (modelText == null) {
@@ -146,7 +213,93 @@ public final class CatchUpLogic {
       }
       points.add(new AiCatchUpPointDTO(trim(text, MAX_POINT_CHARS), new ArrayList<>(refs)));
     }
-    return new Parsed(points, dropped);
+    List<AiCatchUpActionDTO> actions = new ArrayList<>();
+    int droppedActions = 0;
+    JsonNode actionNodes = root.get("actions");
+    if (people != null && actionNodes != null && actionNodes.isArray()) {
+      Map<String, String> logins = new HashMap<>();
+      for (AiCatchUpPersonDTO person : people) {
+        if (person.getLogin() != null) {
+          logins.put(person.getLogin().trim().toLowerCase(Locale.ROOT), person.getLogin().trim());
+        }
+      }
+      for (JsonNode node : actionNodes) {
+        String title = node.hasNonNull("title") ? node.get("title").asText().trim() : "";
+        Set<String> refs = new LinkedHashSet<>();
+        JsonNode refNodes = node.get("refs");
+        if (refNodes != null && refNodes.isArray()) {
+          for (JsonNode r : refNodes) {
+            String ref = r.asText().trim();
+            if (validRefs.contains(ref)) {
+              refs.add(ref);
+            }
+          }
+        }
+        if (title.isEmpty() || refs.isEmpty() || actions.size() >= MAX_ACTIONS) {
+          droppedActions++;
+          continue;
+        }
+        String owner = null;
+        if (node.hasNonNull("ownerLogin")) {
+          owner = logins.get(node.get("ownerLogin").asText().trim().toLowerCase(Locale.ROOT));
+        }
+        String due = null;
+        if (node.hasNonNull("dueDate")) {
+          try {
+            due = LocalDate.parse(node.get("dueDate").asText().trim()).toString();
+          } catch (DateTimeParseException e) {
+            due = null;
+          }
+        }
+        actions.add(new AiCatchUpActionDTO(trim(title, MAX_ACTION_CHARS), owner, due,
+            new ArrayList<>(refs)));
+      }
+    }
+    return new Parsed(points, dropped, actions, droppedActions);
+  }
+
+  /**
+   * Joins the actions of several chunks: the same title (ignoring case and punctuation) is kept
+   * once with the refs of all copies, an action matching an existing sub-task is dropped, and at
+   * most MAX_ACTIONS remain. The number removed is not counted as dropped.
+   */
+  public static List<AiCatchUpActionDTO> mergeActions(List<AiCatchUpActionDTO> actions,
+      List<String> existing) {
+    Set<String> skip = new LinkedHashSet<>();
+    if (existing != null) {
+      for (String title : existing) {
+        skip.add(key(title));
+      }
+    }
+    Map<String, AiCatchUpActionDTO> merged = new java.util.LinkedHashMap<>();
+    for (AiCatchUpActionDTO action : actions) {
+      String key = key(action.getTitle());
+      if (key.isEmpty() || skip.contains(key)) {
+        continue;
+      }
+      AiCatchUpActionDTO seen = merged.get(key);
+      if (seen == null) {
+        merged.put(key, action);
+        continue;
+      }
+      for (String ref : action.getRefs()) {
+        if (!seen.getRefs().contains(ref)) {
+          seen.getRefs().add(ref);
+        }
+      }
+      if (seen.getOwnerLogin() == null) {
+        seen.setOwnerLogin(action.getOwnerLogin());
+      }
+      if (seen.getDueDate() == null) {
+        seen.setDueDate(action.getDueDate());
+      }
+    }
+    List<AiCatchUpActionDTO> out = new ArrayList<>(merged.values());
+    return out.size() <= MAX_ACTIONS ? out : new ArrayList<>(out.subList(0, MAX_ACTIONS));
+  }
+
+  private static String key(String title) {
+    return title == null ? "" : title.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim();
   }
 
   private static String textOf(AiCatchUpItemDTO item) {

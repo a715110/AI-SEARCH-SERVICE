@@ -94,6 +94,44 @@ public class AiCatchUpService {
     return response;
   }
 
+  /**
+   * ADDED 2026-11-27 (draft reply). A reply to the comment thread for the person to edit and post.
+   * Only the newest comments that fit are sent. The refs the model gives are checked against the
+   * ones sent; nothing is saved here.
+   */
+  public AiCatchUpDTO draftReply(AiCatchUpDTO request) {
+    AiCatchUpDTO response = new AiCatchUpDTO();
+    response.setTaskContext(request.getTaskContext());
+    List<AiCatchUpItemDTO> items = new ArrayList<>();
+    if (request.getItems() != null) {
+      for (AiCatchUpItemDTO item : request.getItems()) {
+        if ("comment".equals(item.getKind())) {
+          items.add(item);
+        }
+      }
+    }
+    if (items.isEmpty()) {
+      return response;
+    }
+    List<AiCatchUpItemDTO> sent = DraftReplyLogic.newestWithin(items, Math.min(chunkChars, 8000));
+    Set<String> validRefs = new HashSet<>();
+    for (AiCatchUpItemDTO item : sent) {
+      validRefs.add(item.getRef());
+    }
+    long start = System.currentTimeMillis();
+    String reply = ask(DraftReplyLogic.buildPrompt(request.getTaskContext(),
+        request.getDrafterName(), request.getDraftInstruction(), sent));
+    DraftReplyLogic.Draft draft = DraftReplyLogic.parse(reply, validRefs);
+    if (draft != null) {
+      response.setDraft(draft.text());
+      response.setDraftRefs(draft.refs());
+    }
+    log.info("Draft reply: {} comment(s) sent, draft {}, {} ref(s), {} ms", sent.size(),
+        draft == null ? "none" : "made", draft == null ? 0 : draft.refs().size(),
+        System.currentTimeMillis() - start);
+    return response;
+  }
+
   private String ask(String prompt) {
     return openAiChatClient.prompt().user(prompt).call().content();
   }

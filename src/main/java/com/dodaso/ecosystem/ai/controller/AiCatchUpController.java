@@ -48,4 +48,28 @@ public class AiCatchUpController {
     }
     return new ResponseEntity<>(returnValue, HttpStatus.OK);
   }
+
+  /** ADDED 2026-11-27 (draft reply). A suggested reply to the comments sent; nothing is posted. */
+  @PostMapping(value = "/draftReply", consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  public ResponseEntity<AiCatchUpDTOContainer> draftReply(
+      @RequestBody AiCatchUpDTOContainer requestBody) {
+    AiCatchUpDTOContainer returnValue = new AiCatchUpDTOContainer();
+    if (!companySettings.inAppAnswers(CompanySettings.DEFAULT_COMPANY_ID)) {
+      returnValue.setResultMessage(ANSWERS_OFF);
+      return new ResponseEntity<>(returnValue, HttpStatus.FORBIDDEN);
+    }
+    if (requestBody == null || requestBody.getAiCatchUpDTO() == null) {
+      returnValue.setResultMessage("Nothing to reply to");
+      return new ResponseEntity<>(returnValue, HttpStatus.BAD_REQUEST);
+    }
+    try {
+      returnValue.setAiCatchUpDTO(aiCatchUpService.draftReply(requestBody.getAiCatchUpDTO()));
+    } catch (Exception e) {
+      log.error("Draft reply failed", e);
+      returnValue.setResultMessage("The AI model could not be reached");
+      return new ResponseEntity<>(returnValue, HttpStatus.BAD_GATEWAY);
+    }
+    return new ResponseEntity<>(returnValue, HttpStatus.OK);
+  }
 }

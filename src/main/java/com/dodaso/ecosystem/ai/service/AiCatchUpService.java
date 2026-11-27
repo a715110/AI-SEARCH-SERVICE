@@ -36,6 +36,10 @@ public class AiCatchUpService {
   @Value("${dodaso.ai.catchup.max-items:300}")
   private int maxItems;
 
+  /** ADDED 2026-11-27 (audit trail): the model name returned with every answer. */
+  @Value("${spring.ai.openai.chat.options.model:unknown}")
+  private String modelName;
+
   public AiCatchUpDTO catchUp(AiCatchUpDTO request) {
     AiCatchUpDTO response = new AiCatchUpDTO();
     response.setTaskContext(request.getTaskContext());
@@ -61,9 +65,12 @@ public class AiCatchUpService {
     boolean wantActions = request.isWantActions();
     List<AiCatchUpActionDTO> actions = new ArrayList<>();
     int droppedActions = 0;
+    StringBuilder sent = new StringBuilder();
     for (List<AiCatchUpItemDTO> chunk : chunks) {
-      String reply = ask(CatchUpLogic.buildPrompt(request.getTaskContext(), request.getSince(), chunk,
-          wantActions, request.getCandidateOwners(), request.getExistingSubTasks()));
+      String prompt = CatchUpLogic.buildPrompt(request.getTaskContext(), request.getSince(), chunk,
+          wantActions, request.getCandidateOwners(), request.getExistingSubTasks());
+      remember(sent, prompt);
+      String reply = ask(prompt);
       CatchUpLogic.Parsed parsed = CatchUpLogic.parse(reply, validRefs,
           wantActions ? request.getCandidateOwners() : null);
       collected.addAll(parsed.points());
@@ -72,7 +79,9 @@ public class AiCatchUpService {
       droppedActions += parsed.droppedActions();
     }
     if (chunks.size() > 1 && collected.size() > CatchUpLogic.MAX_POINTS) {
-      String reply = ask(CatchUpLogic.buildMergePrompt(request.getTaskContext(), collected));
+      String mergePrompt = CatchUpLogic.buildMergePrompt(request.getTaskContext(), collected);
+      remember(sent, mergePrompt);
+      String reply = ask(mergePrompt);
       CatchUpLogic.Parsed merged = CatchUpLogic.parse(reply, validRefs);
       if (!merged.points().isEmpty()) {
         collected = new ArrayList<>(merged.points());
@@ -82,6 +91,8 @@ public class AiCatchUpService {
         collected = new ArrayList<>(collected.subList(0, CatchUpLogic.MAX_POINTS));
       }
     }
+    response.setModel(modelName);
+    response.setPromptSent(sent.toString());
     response.setPoints(collected);
     response.setDroppedPoints(dropped);
     if (wantActions) {
@@ -119,8 +130,11 @@ public class AiCatchUpService {
       validRefs.add(item.getRef());
     }
     long start = System.currentTimeMillis();
-    String reply = ask(DraftReplyLogic.buildPrompt(request.getTaskContext(),
-        request.getDrafterName(), request.getDraftInstruction(), sent));
+    String draftPrompt = DraftReplyLogic.buildPrompt(request.getTaskContext(),
+        request.getDrafterName(), request.getDraftInstruction(), sent);
+    response.setModel(modelName);
+    response.setPromptSent(draftPrompt);
+    String reply = ask(draftPrompt);
     DraftReplyLogic.Draft draft = DraftReplyLogic.parse(reply, validRefs);
     if (draft != null) {
       response.setDraft(draft.text());
@@ -130,6 +144,14 @@ public class AiCatchUpService {
         draft == null ? "none" : "made", draft == null ? 0 : draft.refs().size(),
         System.currentTimeMillis() - start);
     return response;
+  }
+
+  /** Keeps the prompts of one answer for the audit trail, separated by a visible line. */
+  private static void remember(StringBuilder sent, String prompt) {
+    if (sent.length() > 0) {
+      sent.append("\n\n===== next prompt =====\n\n");
+    }
+    sent.append(prompt);
   }
 
   private String ask(String prompt) {
